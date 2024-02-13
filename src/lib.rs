@@ -233,38 +233,38 @@ impl Segment {
         let y_int = self.approx_intersection_y(&other.shift_horizontal(eps / 2.0), eps);
         let y_int = y_int.filter(|z| z >= &y);
 
-        match (self.is_almost_horizontal(), other.is_almost_horizontal()) {
-            (true, true) => todo!(),
-            (true, false) => todo!(),
-            (false, true) => todo!(),
-            (false, false) => {
-                if let Some(y) = y_int {
-                    // Because of the shift, maybe there wasn't really an intersection. Or maybe
-                    // the intersection was in the wrong direction.
-                    if end_offset.into_inner() > 0.0 {
-                        (Crosses::At { y }, Interaction::Blocks)
-                    } else {
-                        (Crosses::Never, Interaction::Ignores)
-                    }
-                } else {
-                    // No intersection, or there was an intersection but we're more-or-less parallel.
-                    let crosses = if end_offset >= eps {
-                        Crosses::Now
-                    } else {
-                        Crosses::Never
-                    };
-                    let interact = if end_offset < eps && end_offset >= start_offset + eps {
-                        // TODO: the condition above needs to be compatible with the bound in
-                        // approx_intersection_y. We need to ensure that if we failed to find
-                        // an intersection and the above condition holds, they really are
-                        // disjoint after y.
-                        Interaction::Blocks
-                    } else {
-                        Interaction::Ignores
-                    };
-                    (crosses, interact)
-                }
+        // These first 2 tests make correctness easy, but if it isn't *too* close to horizontal
+        // we could be more accurate with intersection y-positions.
+        // TODO: no, we should just kick out the almost-horizontal segments altogether. They make the invariant too hard...
+        if self.is_almost_horizontal() {
+            (Crosses::Never, Interaction::Blocks)
+        } else if other.is_almost_horizontal() {
+            (Crosses::Never, Interaction::Ignores)
+        } else if let Some(y) = y_int {
+            // Because of the shift, maybe there wasn't really an intersection. Or maybe
+            // the intersection was in the wrong direction.
+            if end_offset.into_inner() > 0.0 {
+                (Crosses::At { y }, Interaction::Blocks)
+            } else {
+                (Crosses::Never, Interaction::Ignores)
             }
+        } else {
+            // No intersection, or there was an intersection but we're more-or-less parallel.
+            let crosses = if end_offset >= eps {
+                Crosses::Now
+            } else {
+                Crosses::Never
+            };
+            let interact = if end_offset < eps && end_offset >= start_offset + eps {
+                // TODO: the condition above needs to be compatible with the bound in
+                // approx_intersection_y. We need to ensure that if we failed to find
+                // an intersection and the above condition holds, they really are
+                // disjoint after y.
+                Interaction::Blocks
+            } else {
+                Interaction::Ignores
+            };
+            (crosses, interact)
         }
     }
 
