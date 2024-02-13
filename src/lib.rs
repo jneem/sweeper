@@ -127,9 +127,14 @@ impl Segment {
     pub fn at_y(&self, y: Float) -> Float {
         assert!((self.start.y..=self.end.y).contains(&y));
 
-        // FIXME: handle horizontal-ish segments
-        let t = (y - self.start.y) / (self.end.y - self.start.y);
-        self.eval(t).x
+        if self.start.y == self.end.y {
+            self.start.x
+        } else {
+            // Even if the segment is *almost* horizontal, t is guaranteed
+            // to be in [0.0, 1.0].
+            let t = (y - self.start.y) / (self.end.y - self.start.y);
+            self.eval(t).x
+        }
     }
 
     pub fn end_offset(&self, other: &Segment) -> Float {
@@ -138,6 +143,15 @@ impl Segment {
             other.at_y(self.end.y) - self.end.x
         } else {
             other.end.x - self.at_y(other.end.y)
+        }
+    }
+
+    pub fn start_offset(&self, other: &Segment) -> Float {
+        // TODO: assert that the domains intersect?
+        if self.start.y >= other.start.y {
+            other.at_y(self.start.y) - self.start.x
+        } else {
+            other.start.x - self.at_y(other.start.y)
         }
     }
 
@@ -177,8 +191,117 @@ impl Segment {
         self.start.y + s * (self.end.y - self.start.y).into_inner()
     }
 
-    pub fn interaction_from_left(&self, _other: &Segment) -> Interaction {
-        todo!()
+    pub fn approx_intersection_y(&self, other: &Segment, eps: Float) -> Option<Float> {
+        let u = self.end - self.start;
+        let v = other.end - other.start;
+        let w = other.start - self.start;
+
+        let det = u.cross(v);
+
+        // This probably isn't the right test. The guarantee we want is: at the y coordinate
+        // of intersection, guarantee that the x coordinates are at most eps/2 apart.
+        // Probably the real bound will need some assumption on the magnitudes of all the coordinates?
+        if det.abs() > eps.sqrt() {
+            let s = w.cross(v) / det;
+            if (0.0..=1.0).contains(&s) {
+                return Some(self.start.y + s * (self.end.y - self.start.y).into_inner());
+            }
+        }
+        None
+    }
+
+    pub fn is_exactly_horizontal(&self) -> bool {
+        self.start.y == self.end.y
+    }
+
+    // TODO: should this depend on epsilon?
+    pub fn is_almost_horizontal(&self) -> bool {
+        (self.start.x - self.end.x).abs() >= 1e3 * (self.start.y - self.end.y).abs()
+    }
+
+    /// If the other segment starts to the left of us, what is the interaction like?
+    pub fn compare_to_the_left(
+        &self,
+        other: &Segment,
+        y: Float,
+        eps: Float,
+    ) -> (Crosses, Interaction) {
+        let start_offset = other.at_y(y) - self.at_y(y);
+        let end_offset = self.end_offset(other);
+
+        // TODO: explain why we shift the other guy
+        let y_int = self.approx_intersection_y(&other.shift_horizontal(eps / 2.0), eps);
+        let y_int = y_int.filter(|z| z >= &y);
+
+        match (self.is_almost_horizontal(), other.is_almost_horizontal()) {
+            (true, true) => todo!(),
+            (true, false) => todo!(),
+            (false, true) => todo!(),
+            (false, false) => {
+                if let Some(y) = y_int {
+                    // Because of the shift, maybe there wasn't really an intersection. Or maybe
+                    // the intersection was in the wrong direction.
+                    if end_offset.into_inner() > 0.0 {
+                        (Crosses::At { y }, Interaction::Blocks)
+                    } else {
+                        (Crosses::Never, Interaction::Ignores)
+                    }
+                } else {
+                    // No intersection, or there was an intersection but we're more-or-less parallel.
+                    let crosses = if end_offset >= eps {
+                        Crosses::Now
+                    } else {
+                        Crosses::Never
+                    };
+                    let interact = if end_offset < eps && end_offset >= start_offset + eps {
+                        // TODO: the condition above needs to be compatible with the bound in
+                        // approx_intersection_y. We need to ensure that if we failed to find
+                        // an intersection and the above condition holds, they really are
+                        // disjoint after y.
+                        Interaction::Blocks
+                    } else {
+                        Interaction::Ignores
+                    };
+                    (crosses, interact)
+                }
+            }
+        }
+    }
+
+    pub fn compare_to_the_right(
+        &self,
+        other: &Segment,
+        y: Float,
+        eps: Float,
+    ) -> (Crosses, Interaction) {
+        self.reflect().compare_to_the_left(&other.reflect(), y, eps)
+    }
+
+    /// Reflect this segment horizontally.
+    pub fn reflect(&self) -> Segment {
+        Segment {
+            start: Point {
+                x: -self.start.x,
+                y: self.start.y,
+            },
+            end: Point {
+                x: -self.end.x,
+                y: self.end.y,
+            },
+        }
+    }
+
+    pub fn shift_horizontal(&self, delta: Float) -> Segment {
+        Segment {
+            start: Point {
+                x: self.start.x + delta,
+                y: self.start.y,
+            },
+            end: Point {
+                x: self.end.x + delta,
+                y: self.end.y,
+            },
+        }
     }
 }
 
@@ -191,11 +314,16 @@ pub struct SweepEvent {
     payload: SweepEventPayload,
 }
 
+#[derive(Debug)]
+pub enum Crosses {
+    Now,
+    At { y: Float },
+    Never,
+}
+
+#[derive(Debug)]
 pub enum Interaction {
-    Close,
-    CloseCrosses,
-    Crosses,
-    Covers,
+    Blocks,
     Ignores,
 }
 
@@ -401,33 +529,34 @@ impl SweepLine {
         eps: Float,
         allow_swap: bool,
         arena: &SegmentArena,
-    ) -> (usize, Option<SweepEvent>) {
+        queue: &mut EventQueue,
+    ) -> usize {
         let scanning_seg = arena.get(self.segments[idx]);
-        let x = scanning_seg.at_y(self.y);
 
         for j in (0..idx).rev() {
             let seg = arena.get(self.segments[j]);
             // TODO: this also counts crossings of segments that are adjacent in
             // the contour. It's harmless, but we can filter them out
-            if scanning_seg.robustly_crossed_right_by(&seg, self.y, eps) {
-                let int_y = scanning_seg.intersection_y(&seg);
-                assert!(int_y > self.y);
-                return (
-                    idx,
-                    Some(SweepEvent::intersection(
-                        self.segments[j],
-                        self.segments[idx],
-                        int_y,
-                    )),
-                );
-            } else if seg.at_y(self.y) < x - eps {
-                return (idx, None);
-            } else if allow_swap && scanning_seg.crossed_right_by(&seg, eps * 0.75) {
-                self.segments[j..=idx].rotate_right(1);
-                idx = j;
+            let (crosses, interaction) = scanning_seg.compare_to_the_left(&seg, self.y, eps);
+            match crosses {
+                Crosses::At { y } => queue.push(SweepEvent::intersection(
+                    self.segments[j],
+                    self.segments[idx],
+                    y,
+                )),
+                Crosses::Now if allow_swap => {
+                    // TODO: does it matter which way we rotate? Everything in between is supposed to be eps-close anyway...
+                    // It might matter for almost-horizontal segments
+                    self.segments[j..=idx].rotate_left(1);
+                    idx -= 1;
+                }
+                Crosses::Now | Crosses::Never => {}
+            }
+            if matches!(interaction, Interaction::Blocks) {
+                break;
             }
         }
-        (idx, None)
+        idx
     }
 
     fn scan_right(
@@ -436,42 +565,37 @@ impl SweepLine {
         eps: Float,
         allow_swap: bool,
         arena: &SegmentArena,
-    ) -> (usize, Option<SweepEvent>) {
+        queue: &mut EventQueue,
+    ) -> usize {
         let scanning_seg = arena.get(self.segments[idx]);
-        let x = scanning_seg.at_y(self.y);
 
         for j in (idx + 1)..self.segments.len() {
             let seg = arena.get(self.segments[j]);
-            if scanning_seg.robustly_crossed_left_by(&seg, self.y, eps) {
-                let int_y = scanning_seg.intersection_y(&seg);
-                assert!(int_y > self.y);
-                return (
-                    idx,
-                    Some(SweepEvent::intersection(
-                        self.segments[idx],
-                        self.segments[j],
-                        int_y,
-                    )),
-                );
-            } else if seg.at_y(self.y) > x + eps {
-                return (idx, None);
-            } else if allow_swap && scanning_seg.crossed_left_by(&seg, eps * 0.75) {
-                self.segments[idx..=j].rotate_left(1);
-                idx = j;
+            // TODO: this also counts crossings of segments that are adjacent in
+            // the contour. It's harmless, but we can filter them out
+            let (crosses, interaction) = scanning_seg.compare_to_the_right(&seg, self.y, eps);
+            match crosses {
+                Crosses::At { y } => queue.push(SweepEvent::intersection(
+                    self.segments[idx],
+                    self.segments[j],
+                    y,
+                )),
+                Crosses::Now if allow_swap => {
+                    self.segments[idx..=j].rotate_right(1);
+                    idx -= 1;
+                }
+                Crosses::Now | Crosses::Never => {}
+            }
+            if matches!(interaction, Interaction::Blocks) {
+                break;
             }
         }
-        (idx, None)
+        idx
     }
 
-    fn scan_both(
-        &mut self,
-        idx: usize,
-        eps: Float,
-        arena: &SegmentArena,
-    ) -> impl Iterator<Item = SweepEvent> {
-        let (idx, ev1) = self.scan_right(idx, eps, true, arena);
-        let (_, ev2) = self.scan_left(idx, eps, true, arena);
-        ev1.into_iter().chain(ev2)
+    fn scan_both(&mut self, idx: usize, eps: Float, arena: &SegmentArena, queue: &mut EventQueue) {
+        let idx = self.scan_right(idx, eps, true, arena, queue);
+        self.scan_left(idx, eps, true, arena, queue);
     }
 
     pub fn process_event(
@@ -494,14 +618,14 @@ impl SweepLine {
                 self.segments.insert(idx, right);
                 self.segments.insert(idx, left);
 
-                queue.extend(self.scan_left(idx, eps, true, arena).1);
-                queue.extend(self.scan_right(idx + 1, eps, true, arena).1);
+                self.scan_left(idx, eps, true, arena, queue);
+                self.scan_right(idx + 1, eps, true, arena, queue);
             }
             SweepEventPayload::ExitEnter { exit, enter } => {
                 let idx = self.find_seg_ref(exit);
                 self.segments[idx] = enter;
 
-                queue.extend(self.scan_both(idx, eps, arena));
+                self.scan_both(idx, eps, arena, queue);
             }
             SweepEventPayload::ExitExit { left, right } => {
                 let left_idx = self.find_seg_ref(left);
@@ -513,10 +637,10 @@ impl SweepLine {
                 right_idx -= 1;
                 self.segments.remove(right_idx);
                 if let Some(left_left) = left_idx.checked_sub(1) {
-                    queue.extend(self.scan_left(left_left, eps, false, arena).1);
+                    self.scan_left(left_left, eps, false, arena, queue);
                 }
                 if right_idx < self.segments.len() {
-                    queue.extend(self.scan_right(right_idx, eps, false, arena).1);
+                    self.scan_right(right_idx, eps, false, arena, queue);
                 }
             }
             SweepEventPayload::Intersection { left, right, .. } => {
@@ -527,11 +651,11 @@ impl SweepLine {
                 if left_idx < right_idx {
                     self.segments.swap(left_idx, right_idx);
                     let (left_idx, right_idx) = (right_idx, left_idx);
-                    queue.extend(self.scan_both(left_idx, eps, arena));
+                    self.scan_both(left_idx, eps, arena, queue);
 
                     // It should be impossible for the two just-intersected segments to swap.
                     assert_eq!(right_idx, self.find_seg_ref(right));
-                    queue.extend(self.scan_both(right_idx, eps, arena));
+                    self.scan_both(right_idx, eps, arena, queue);
                 }
             }
         }
@@ -683,5 +807,29 @@ mod tests {
         assert_eq!(c.intersection_y(&a), 5.0);
         assert_eq!(b.intersection_y(&c), 5.0);
         assert_eq!(c.intersection_y(&b), 5.0);
+    }
+
+    #[test]
+    fn approx_intersection_y() {
+        let a = Segment {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(0.0, 10.0),
+        };
+        let b = Segment {
+            start: Point::new(-5.0, 0.0),
+            end: Point::new(5.0, 10.0),
+        };
+        let c = Segment {
+            start: Point::new(-5.0, 2.0),
+            end: Point::new(5.0, 8.0),
+        };
+
+        let eps = Float::try_from(0.1).unwrap();
+        assert_eq!(a.approx_intersection_y(&b, eps).unwrap(), 5.0);
+        assert_eq!(b.approx_intersection_y(&a, eps).unwrap(), 5.0);
+        assert_eq!(a.approx_intersection_y(&c, eps).unwrap(), 5.0);
+        assert_eq!(c.approx_intersection_y(&a, eps).unwrap(), 5.0);
+        assert_eq!(b.approx_intersection_y(&c, eps).unwrap(), 5.0);
+        assert_eq!(c.approx_intersection_y(&b, eps).unwrap(), 5.0);
     }
 }
