@@ -1,8 +1,9 @@
 use std::{
     cmp::{Ordering, Reverse},
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashSet},
 };
 
+use malachite::Rational;
 use ordered_float::NotNan;
 
 type Float = NotNan<f64>;
@@ -66,15 +67,144 @@ impl Vector {
 }
 
 // The start point of a line is always strictly less than its end point.
+// This is the right representation for most of the sweep-line operations,
+// but it's a little clunky for other things because we need to keep track of
+// the original orientation.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Segment {
     pub start: Point,
     pub end: Point,
 }
 
+impl Segment {
+    /// The second return value is true if the original point order was preserved.
+    ///
+    /// Panics if the points are equal.
+    pub fn from_unordered_points(p0: Point, p1: Point) -> (Segment, bool) {
+        match p0.cmp(&p1) {
+            Ordering::Less => (Segment { start: p0, end: p1 }, true),
+            Ordering::Greater => (Segment { start: p1, end: p0 }, false),
+            Ordering::Equal => panic!("empty segment"),
+        }
+    }
+}
+
 impl std::fmt::Debug for Segment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?} -- {:?}", self.start, self.end)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ExactPoint {
+    y: Rational,
+    x: Rational,
+}
+
+impl From<Point> for ExactPoint {
+    fn from(p: Point) -> Self {
+        Self {
+            // Rational::try_from(f64) fails on NaN (impossible because we use NotNan)
+            // and infinity (possible, but a bug).
+            x: p.x.into_inner().try_into().unwrap(),
+            y: p.y.into_inner().try_into().unwrap(),
+        }
+    }
+}
+
+impl<'a> std::ops::Sub<&'a ExactPoint> for &'a ExactPoint {
+    type Output = ExactVector;
+
+    fn sub(self, rhs: &'a ExactPoint) -> ExactVector {
+        ExactVector {
+            x: &self.x - &rhs.x,
+            y: &self.y - &rhs.y,
+        }
+    }
+}
+
+impl ExactPoint {
+    pub fn affine(&self, other: &ExactPoint, t: &Rational) -> ExactPoint {
+        let one = Rational::from(1);
+        ExactPoint {
+            x: (&one - t) * &self.x + t * &other.x,
+            y: (&one - t) * &self.y + t * &other.y,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ExactSegment {
+    start: ExactPoint,
+    end: ExactPoint,
+}
+
+impl From<Segment> for ExactSegment {
+    fn from(s: Segment) -> Self {
+        Self {
+            start: s.start.into(),
+            end: s.end.into(),
+        }
+    }
+}
+
+impl ExactSegment {
+    pub fn at_y(&self, y: &Rational) -> Rational {
+        if self.start.y == self.end.y {
+            self.end.x.clone()
+        } else {
+            let t = (y - &self.start.y) / (&self.end.y - &self.start.y);
+            self.start.affine(&self.end, &t).x
+        }
+    }
+
+    // (If there's an interval of intersection, returns the last intersecting y)
+    pub fn intersection_y(&self, other: &ExactSegment) -> Option<Rational> {
+        let u = &self.end - &self.start;
+        let v = &other.end - &other.start;
+        let w = &other.start - &self.start;
+
+        let det = u.cross(&v);
+        if det == 0 {
+            // They're parallel.
+            if u.cross(&w) == 0 {
+                // They're colinear, so need to check if they overlap.
+                // (If they aren't vertical we only need to check x...)
+                if (self.start.x <= other.end.x && other.start.x <= self.end.x)
+                    && (self.start.y <= other.end.y && other.start.y <= self.end.y)
+                {
+                    Some((&self.end.y).min(&other.end.y).clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            let s = w.cross(&v) / &det;
+            let t = w.cross(&u) / &det;
+            if (0..=1).contains(&s) && (0..=1).contains(&t) {
+                Some(&self.start.y + &s * &u.y)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExactVector {
+    pub x: Rational,
+    pub y: Rational,
+}
+
+impl ExactVector {
+    pub fn cross(&self, other: &ExactVector) -> Rational {
+        &self.x * &other.y - &self.y * &other.x
+    }
+
+    pub fn dot(&self, other: ExactVector) -> Rational {
+        &self.x * &other.x + &self.y * &other.y
     }
 }
 
@@ -124,11 +254,16 @@ impl Segment {
         self.start.affine(self.end, t)
     }
 
+    /// Our `x` coordinate at the given `y` coordinate.
+    ///
+    /// Horizontal segments will return their largest `x` coordinate.
+    ///
+    /// Panics if `y` is outside the `y` range of this segment.
     pub fn at_y(&self, y: Float) -> Float {
         assert!((self.start.y..=self.end.y).contains(&y));
 
         if self.start.y == self.end.y {
-            self.start.x
+            self.end.x
         } else {
             // Even if the segment is *almost* horizontal, t is guaranteed
             // to be in [0.0, 1.0].
@@ -137,8 +272,11 @@ impl Segment {
         }
     }
 
+    /// Returns the x difference between segments at the last y position that they share.
+    /// Returns a positive value if `other` is to the right.
+    ///
+    /// (Returns nonsense if they don't share a y position.)
     pub fn end_offset(&self, other: &Segment) -> Float {
-        // TODO: assert that the domains intersect?
         if self.end.y < other.end.y {
             other.at_y(self.end.y) - self.end.x
         } else {
@@ -146,8 +284,11 @@ impl Segment {
         }
     }
 
+    /// Returns the x difference between segments at the first y position that they share.
+    /// Returns a positive value if `other` is to the right.
+    ///
+    /// (Returns nonsense if they don't share a y position.)
     pub fn start_offset(&self, other: &Segment) -> Float {
-        // TODO: assert that the domains intersect?
         if self.start.y >= other.start.y {
             other.at_y(self.start.y) - self.start.x
         } else {
@@ -155,42 +296,19 @@ impl Segment {
         }
     }
 
-    /// Does the other segment cross us by at least epsilon to the right?
-    pub fn crossed_right_by(&self, other: &Segment, eps: Float) -> bool {
-        self.end_offset(other) >= eps
-    }
-
-    /// Does the other segment cross us by at least epsilon to the right?
-    pub fn robustly_crossed_right_by(&self, other: &Segment, initial_y: Float, eps: Float) -> bool {
-        let start_offset = other.at_y(initial_y) - self.at_y(initial_y);
-        let end_offset = self.end_offset(other);
-
-        end_offset >= -eps / 4.0 && end_offset >= start_offset + eps / 2.0
-    }
-
-    /// Does the other segment cross us by at least epsilon to the left?
-    pub fn crossed_left_by(&self, other: &Segment, eps: Float) -> bool {
-        self.end_offset(other) <= -eps
-    }
-
-    /// Does the other segment cross us by at least epsilon to the left?
-    pub fn robustly_crossed_left_by(&self, other: &Segment, initial_y: Float, eps: Float) -> bool {
-        let start_offset = other.at_y(initial_y) - self.at_y(initial_y);
-        let end_offset = self.end_offset(other);
-
-        end_offset <= eps / 4.0 && end_offset <= start_offset - eps / 2.0
-    }
-
-    pub fn intersection_y(&self, other: &Segment) -> Float {
-        let u = self.end - self.start;
-        let v = other.end - other.start;
-        let w = other.start - self.start;
-
-        let det = u.cross(v);
-        let s = (w.cross(v) / det).clamp(0.0, 1.0);
-        self.start.y + s * (self.end.y - self.start.y).into_inner()
-    }
-
+    /// Returns the y-coordinate of the intersection between this segment and the other, if
+    /// there is one and we can get an accurate estimate of it.
+    ///
+    /// We guarantee that if this returns a y value, the two line segments have approximately
+    /// the same x-coordinate (within eps/2) at that y value.
+    ///
+    /// (Actually, we don't guarantee anything of the sort because I haven't done the analysis
+    /// yet. But that's the guarantee we need. We're allowed to assume that the lines aren't
+    /// close to horizontal.)
+    ///
+    /// This function is allowed to have false negatives (i.e. fail to find an intersection if
+    /// there is one but just barely). In this case the intersection will be caught by comparing
+    /// x coordinates along the sweep line.
     pub fn approx_intersection_y(&self, other: &Segment, eps: Float) -> Option<Float> {
         let u = self.end - self.start;
         let v = other.end - other.start;
@@ -203,7 +321,8 @@ impl Segment {
         // Probably the real bound will need some assumption on the magnitudes of all the coordinates?
         if det.abs() > eps.sqrt() {
             let s = w.cross(v) / det;
-            if (0.0..=1.0).contains(&s) {
+            let t = w.cross(u) / det;
+            if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
                 return Some(self.start.y + s * (self.end.y - self.start.y).into_inner());
             }
         }
@@ -214,7 +333,7 @@ impl Segment {
         self.start.y == self.end.y
     }
 
-    // TODO: should this depend on epsilon?
+    // TODO: should this depend on epsilon? probably.
     pub fn is_almost_horizontal(&self) -> bool {
         (self.start.x - self.end.x).abs() >= 1e3 * (self.start.y - self.end.y).abs()
     }
@@ -231,16 +350,10 @@ impl Segment {
 
         // TODO: explain why we shift the other guy
         let y_int = self.approx_intersection_y(&other.shift_horizontal(eps / 2.0), eps);
-        let y_int = y_int.filter(|z| z >= &y);
+        let y_int = y_int
+            .filter(|z| z >= &y && !self.is_exactly_horizontal() && !other.is_exactly_horizontal());
 
-        // These first 2 tests make correctness easy, but if it isn't *too* close to horizontal
-        // we could be more accurate with intersection y-positions.
-        // TODO: no, we should just kick out the almost-horizontal segments altogether. They make the invariant too hard...
-        if self.is_almost_horizontal() {
-            (Crosses::Never, Interaction::Blocks)
-        } else if other.is_almost_horizontal() {
-            (Crosses::Never, Interaction::Ignores)
-        } else if let Some(y) = y_int {
+        if let Some(y) = y_int {
             // Because of the shift, maybe there wasn't really an intersection. Or maybe
             // the intersection was in the wrong direction.
             if end_offset.into_inner() > 0.0 {
@@ -255,11 +368,14 @@ impl Segment {
             } else {
                 Crosses::Never
             };
+            #[allow(clippy::if_same_then_else)]
             let interact = if end_offset < eps && end_offset >= start_offset + eps {
                 // TODO: the condition above needs to be compatible with the bound in
                 // approx_intersection_y. We need to ensure that if we failed to find
                 // an intersection and the above condition holds, they really are
                 // disjoint after y.
+                Interaction::Blocks
+            } else if end_offset < -eps {
                 Interaction::Blocks
             } else {
                 Interaction::Ignores
@@ -305,7 +421,7 @@ impl Segment {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SegRef(usize);
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
@@ -339,7 +455,7 @@ impl SweepEvent {
     fn intersection(left: SegRef, right: SegRef, y: Float) -> SweepEvent {
         SweepEvent {
             y,
-            payload: SweepEventPayload::Intersection { y, left, right },
+            payload: SweepEventPayload::Intersection { left, right },
         }
     }
 
@@ -396,24 +512,10 @@ impl std::fmt::Debug for SweepEvent {
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub enum SweepEventPayload {
-    Intersection {
-        // TODO: remove this? It's in SweepEvent anyway. Or maybe remove that one...
-        y: Float,
-        left: SegRef,
-        right: SegRef,
-    },
-    EnterEnter {
-        left: SegRef,
-        right: SegRef,
-    },
-    ExitExit {
-        left: SegRef,
-        right: SegRef,
-    },
-    ExitEnter {
-        exit: SegRef,
-        enter: SegRef,
-    },
+    Intersection { left: SegRef, right: SegRef },
+    EnterEnter { left: SegRef, right: SegRef },
+    ExitEnter { exit: SegRef, enter: SegRef },
+    ExitExit { left: SegRef, right: SegRef },
 }
 
 impl std::fmt::Debug for SweepEventPayload {
@@ -456,10 +558,21 @@ impl std::fmt::Debug for SweepLine {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum InvariantViolation {
-    SegmentDomain { seg: Segment, y: Float },
-    SegmentOrder { before: Segment, after: Segment },
-    MissingEvent { left: Segment, right: Segment },
+    SegmentDomain {
+        seg: Segment,
+        y: Float,
+    },
+    SegmentOrder {
+        before: Segment,
+        after: Segment,
+        y: Float,
+    },
+    MissingEvent {
+        left: Segment,
+        right: Segment,
+    },
 }
 
 #[derive(Default)]
@@ -494,8 +607,60 @@ impl std::fmt::Debug for EventQueue {
 }
 
 impl SweepLine {
-    pub fn check_invariants(&self) -> Result<(), InvariantViolation> {
-        todo!()
+    pub fn check_invariants(
+        &self,
+        eps: Float,
+        arena: &SegmentArena,
+        queue: &EventQueue,
+    ) -> Result<(), InvariantViolation> {
+        let y = Rational::try_from(self.y.into_inner()).unwrap();
+        let eps = Rational::try_from(eps.into_inner()).unwrap();
+        for i in 0..self.segments.len() {
+            let seg_i_approx = arena.get(self.segments[i]);
+            let seg_i = ExactSegment::from(seg_i_approx);
+            if !(&seg_i.start.y..=&seg_i.end.y).contains(&&y) {
+                return Err(InvariantViolation::SegmentDomain {
+                    seg: seg_i_approx,
+                    y: self.y,
+                });
+            }
+
+            for j in (i + 1)..self.segments.len() {
+                let seg_j_approx = arena.get(self.segments[j]);
+                let seg_j = ExactSegment::from(seg_j_approx);
+
+                if seg_i.at_y(&y) > seg_j.at_y(&y) + &eps {
+                    return Err(InvariantViolation::SegmentOrder {
+                        before: seg_i_approx,
+                        after: seg_j_approx,
+                        y: self.y,
+                    });
+                }
+
+                if let Some(y_int) = seg_j.intersection_y(&seg_j) {
+                    // The segments between i and j. There has to be some event that involves them.
+                    let between_segs: HashSet<_> = (i..=j).map(|k| self.segments[k]).collect();
+                    let good_ev = |Reverse(ev): &Reverse<SweepEvent>| {
+                        let (a, b) = match ev.payload {
+                            SweepEventPayload::Intersection { left, right } => (left, right),
+                            SweepEventPayload::EnterEnter { left, right } => (left, right),
+                            SweepEventPayload::ExitEnter { exit, enter } => (exit, enter),
+                            SweepEventPayload::ExitExit { left, right } => (left, right),
+                        };
+                        ev.y.into_inner() <= y_int
+                            && (between_segs.contains(&a) || between_segs.contains(&b))
+                    };
+                    if y_int > y && !queue.inner.iter().any(good_ev) {
+                        return Err(InvariantViolation::MissingEvent {
+                            left: seg_i_approx,
+                            right: seg_j_approx,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Find a valid insertion index for a segment at position x.
@@ -520,7 +685,10 @@ impl SweepLine {
 
     fn find_seg_ref(&self, seg: SegRef) -> usize {
         // TODO: should be able to do this in logarithmic time
-        self.segments.iter().position(|s| s == &seg).unwrap()
+        self.segments
+            .iter()
+            .position(|s| s == &seg)
+            .expect("missing seg ref")
     }
 
     fn scan_left(
@@ -573,7 +741,8 @@ impl SweepLine {
             let seg = arena.get(self.segments[j]);
             // TODO: this also counts crossings of segments that are adjacent in
             // the contour. It's harmless, but we can filter them out
-            let (crosses, interaction) = scanning_seg.compare_to_the_right(&seg, self.y, eps);
+            dbg!(self.segments[idx], self.segments[j]);
+            let (crosses, interaction) = dbg!(scanning_seg.compare_to_the_right(&seg, self.y, eps));
             match crosses {
                 Crosses::At { y } => queue.push(SweepEvent::intersection(
                     self.segments[idx],
@@ -605,6 +774,7 @@ impl SweepLine {
         arena: &SegmentArena,
         queue: &mut EventQueue,
     ) {
+        dbg!(&event);
         self.y = event.y;
         match event.payload {
             SweepEventPayload::EnterEnter { left, right } => {
@@ -717,6 +887,9 @@ impl Sweeper {
         while !self.queue.is_empty() {
             self.step();
             dbg!(&self.sweep_line, &self.queue);
+            self.sweep_line
+                .check_invariants(self.eps, &self.segments, &self.queue)
+                .unwrap();
         }
     }
 
@@ -735,10 +908,26 @@ impl Sweeper {
     }
 }
 
+/// Eliminates almost horizontal segments by replacing them with an exactly horizontal
+/// segment followed by a vertical segment.
+pub fn preprocess_horizontal_segments(points: &[Point]) -> Vec<Point> {
+    let mut ret = Vec::new();
+
+    for (p0, p1) in cyclic_pairs(points) {
+        let (seg, _) = Segment::from_unordered_points(*p0, *p1);
+        ret.push(*p0);
+        if seg.is_almost_horizontal() && !seg.is_exactly_horizontal() {
+            ret.push(Point { x: p1.x, y: p0.y });
+        }
+    }
+    ret
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // TODO: test these small examples with perturbations
     #[test]
     fn small_example() {
         let mut sweeper = Sweeper {
@@ -761,52 +950,56 @@ mod tests {
     }
 
     #[test]
+    fn small_example_with_vertical() {
+        let mut sweeper = Sweeper {
+            sweep_line: SweepLine::default(),
+            queue: EventQueue::default(),
+            segments: SegmentArena::default(),
+            eps: 0.1.try_into().unwrap(),
+        };
+
+        sweeper.add_closed_polyline(&[
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(1.0, -1.0),
+            Point::new(2.0, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(1.0, -1.0),
+        ]);
+
+        sweeper.run();
+    }
+
+    #[test]
+    fn small_example_with_horizontal() {
+        let mut sweeper = Sweeper {
+            sweep_line: SweepLine::default(),
+            queue: EventQueue::default(),
+            segments: SegmentArena::default(),
+            eps: 0.1.try_into().unwrap(),
+        };
+
+        sweeper.add_closed_polyline(&[
+            Point::new(0.0, 1.0),
+            Point::new(1.0, 1.0),
+            Point::new(1.0, -1.0),
+            Point::new(2.0, -1.0),
+            Point::new(2.0, 1.0),
+            Point::new(1.0, 1.0),
+            Point::new(1.0, -1.0),
+            Point::new(0.0, -1.0),
+        ]);
+
+        sweeper.run();
+    }
+
+    #[test]
     fn clockwise() {
         assert!(super::clockwise(
             Point::new(1.0, -1.0),
             Point::new(0.0, 0.0),
             Point::new(2.0, 0.0)
         ));
-    }
-
-    #[test]
-    fn robust_crossing() {
-        let s0 = Segment {
-            start: Point::new(1.0, -1.0),
-            end: Point::new(3.0, 1.0),
-        };
-        let s1 = Segment {
-            start: Point::new(3.0, -1.0),
-            end: Point::new(1.0, 1.0),
-        };
-        let y = NotNan::new(-1.0).unwrap();
-        let eps = NotNan::new(0.1).unwrap();
-
-        assert!(s0.robustly_crossed_left_by(&s1, y, eps));
-        assert!(s1.robustly_crossed_right_by(&s0, y, eps));
-    }
-
-    #[test]
-    fn intersection_y() {
-        let a = Segment {
-            start: Point::new(0.0, 0.0),
-            end: Point::new(0.0, 10.0),
-        };
-        let b = Segment {
-            start: Point::new(-5.0, 0.0),
-            end: Point::new(5.0, 10.0),
-        };
-        let c = Segment {
-            start: Point::new(-5.0, 2.0),
-            end: Point::new(5.0, 8.0),
-        };
-
-        assert_eq!(a.intersection_y(&b), 5.0);
-        assert_eq!(b.intersection_y(&a), 5.0);
-        assert_eq!(a.intersection_y(&c), 5.0);
-        assert_eq!(c.intersection_y(&a), 5.0);
-        assert_eq!(b.intersection_y(&c), 5.0);
-        assert_eq!(c.intersection_y(&b), 5.0);
     }
 
     #[test]
@@ -831,5 +1024,42 @@ mod tests {
         assert_eq!(c.approx_intersection_y(&a, eps).unwrap(), 5.0);
         assert_eq!(b.approx_intersection_y(&c, eps).unwrap(), 5.0);
         assert_eq!(c.approx_intersection_y(&b, eps).unwrap(), 5.0);
+    }
+
+    #[test]
+    fn exact_intersection() {
+        let a = ExactSegment::from(Segment {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(0.0, 1.0),
+        });
+
+        let b = ExactSegment::from(Segment {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(0.0, 0.99),
+        });
+
+        let c = ExactSegment::from(Segment {
+            start: Point::new(-1.0, 1.0),
+            end: Point::new(1.0, 1.0),
+        });
+
+        let d = ExactSegment::from(Segment {
+            start: Point::new(0.0, 1.0),
+            end: Point::new(0.0, 2.0),
+        });
+
+        assert_eq!(a.intersection_y(&b).unwrap(), 0.99);
+        assert_eq!(b.intersection_y(&a).unwrap(), 0.99);
+        assert_eq!(a.intersection_y(&c).unwrap(), 1);
+        assert_eq!(c.intersection_y(&a).unwrap(), 1);
+        assert_eq!(b.intersection_y(&c), None);
+        assert_eq!(c.intersection_y(&b), None);
+
+        assert_eq!(a.intersection_y(&d).unwrap(), 1);
+        assert_eq!(d.intersection_y(&a).unwrap(), 1);
+        assert_eq!(b.intersection_y(&d), None);
+        assert_eq!(d.intersection_y(&b), None);
+        assert_eq!(c.intersection_y(&d).unwrap(), 1);
+        assert_eq!(d.intersection_y(&c).unwrap(), 1);
     }
 }

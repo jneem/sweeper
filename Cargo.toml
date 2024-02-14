@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+malachite = "0.4.5"
 ordered-float = "4.2.0"
 robust = "1.1.0"
