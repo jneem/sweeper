@@ -8,6 +8,8 @@ use ordered_float::NotNan;
 
 type Float = NotNan<f64>;
 
+pub mod exact;
+
 // Points are sorted by `y` and then by `x`
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Point {
@@ -95,161 +97,7 @@ impl std::fmt::Debug for Segment {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ExactPoint {
-    y: Rational,
-    x: Rational,
-}
-
-impl From<Point> for ExactPoint {
-    fn from(p: Point) -> Self {
-        Self {
-            // Rational::try_from(f64) fails on NaN (impossible because we use NotNan)
-            // and infinity (possible, but a bug).
-            x: p.x.into_inner().try_into().unwrap(),
-            y: p.y.into_inner().try_into().unwrap(),
-        }
-    }
-}
-
-impl<'a> std::ops::Sub<&'a ExactPoint> for &'a ExactPoint {
-    type Output = ExactVector;
-
-    fn sub(self, rhs: &'a ExactPoint) -> ExactVector {
-        ExactVector {
-            x: &self.x - &rhs.x,
-            y: &self.y - &rhs.y,
-        }
-    }
-}
-
-impl ExactPoint {
-    pub fn affine(&self, other: &ExactPoint, t: &Rational) -> ExactPoint {
-        let one = Rational::from(1);
-        ExactPoint {
-            x: (&one - t) * &self.x + t * &other.x,
-            y: (&one - t) * &self.y + t * &other.y,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ExactSegment {
-    start: ExactPoint,
-    end: ExactPoint,
-}
-
-impl From<Segment> for ExactSegment {
-    fn from(s: Segment) -> Self {
-        Self {
-            start: s.start.into(),
-            end: s.end.into(),
-        }
-    }
-}
-
-impl ExactSegment {
-    pub fn at_y(&self, y: &Rational) -> Rational {
-        if self.start.y == self.end.y {
-            self.end.x.clone()
-        } else {
-            let t = (y - &self.start.y) / (&self.end.y - &self.start.y);
-            self.start.affine(&self.end, &t).x
-        }
-    }
-
-    // (If there's an interval of intersection, returns the last intersecting y)
-    pub fn intersection_y(&self, other: &ExactSegment) -> Option<Rational> {
-        let u = &self.end - &self.start;
-        let v = &other.end - &other.start;
-        let w = &other.start - &self.start;
-
-        let det = u.cross(&v);
-        if det == 0 {
-            // They're parallel.
-            if u.cross(&w) == 0 {
-                // They're colinear, so need to check if they overlap.
-                // (If they aren't vertical we only need to check x...)
-                if (self.start.x <= other.end.x && other.start.x <= self.end.x)
-                    && (self.start.y <= other.end.y && other.start.y <= self.end.y)
-                {
-                    Some((&self.end.y).min(&other.end.y).clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            let s = w.cross(&v) / &det;
-            let t = w.cross(&u) / &det;
-            if (0..=1).contains(&s) && (0..=1).contains(&t) {
-                Some(&self.start.y + &s * &u.y)
-            } else {
-                None
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExactVector {
-    pub x: Rational,
-    pub y: Rational,
-}
-
-impl ExactVector {
-    pub fn cross(&self, other: &ExactVector) -> Rational {
-        &self.x * &other.y - &self.y * &other.x
-    }
-
-    pub fn dot(&self, other: ExactVector) -> Rational {
-        &self.x * &other.x + &self.y * &other.y
-    }
-}
-
-// A closed, axis-aligned rectangle.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Rect {
-    pub xmin: Float,
-    pub xmax: Float,
-    pub ymin: Float,
-    pub ymax: Float,
-}
-
-impl Rect {
-    pub fn intersect(&self, other: &Rect) -> Rect {
-        Rect {
-            xmin: self.xmin.max(other.xmin),
-            xmax: self.xmax.min(other.xmax),
-            ymin: self.ymin.max(other.ymin),
-            ymax: self.ymax.min(other.ymax),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.xmin > self.xmax || self.ymin > self.ymax
-    }
-
-    // Panics if we're empty.
-    pub fn constrain(&self, p: Point) -> Point {
-        Point {
-            x: p.x.clamp(self.xmin, self.xmax),
-            y: p.y.clamp(self.ymin, self.ymax),
-        }
-    }
-}
-
 impl Segment {
-    pub fn bounding_box(&self) -> Rect {
-        Rect {
-            xmin: self.start.x,
-            xmax: self.end.x,
-            ymin: self.start.y.min(self.end.y),
-            ymax: self.start.y.max(self.end.y),
-        }
-    }
-
     pub fn eval(&self, t: Float) -> Point {
         self.start.affine(self.end, t)
     }
@@ -617,7 +465,7 @@ impl SweepLine {
         let eps = Rational::try_from(eps.into_inner()).unwrap();
         for i in 0..self.segments.len() {
             let seg_i_approx = arena.get(self.segments[i]);
-            let seg_i = ExactSegment::from(seg_i_approx);
+            let seg_i = exact::Segment::from(seg_i_approx);
             if !(&seg_i.start.y..=&seg_i.end.y).contains(&&y) {
                 return Err(InvariantViolation::SegmentDomain {
                     seg: seg_i_approx,
@@ -627,7 +475,7 @@ impl SweepLine {
 
             for j in (i + 1)..self.segments.len() {
                 let seg_j_approx = arena.get(self.segments[j]);
-                let seg_j = ExactSegment::from(seg_j_approx);
+                let seg_j = exact::Segment::from(seg_j_approx);
 
                 if seg_i.at_y(&y) > seg_j.at_y(&y) + &eps {
                     return Err(InvariantViolation::SegmentOrder {
@@ -836,6 +684,8 @@ impl SweepLine {
 pub struct SegmentArena {
     pub all_segments: Vec<Segment>,
     in_order: Vec<bool>,
+    contour_next: Vec<SegRef>,
+    contour_prev: Vec<SegRef>,
 }
 
 impl SegmentArena {
@@ -856,7 +706,16 @@ impl SegmentArena {
             self.all_segments.push(Segment { start: p1, end: p0 });
             self.in_order.push(false);
         }
-        SegRef(self.all_segments.len() - 1)
+        let seg = SegRef(self.all_segments.len() - 1);
+        self.contour_next.push(seg);
+        self.contour_prev.push(seg);
+        seg
+    }
+
+    /// Mark s1 as following s0 in a contour.
+    pub fn add_contour_link(&mut self, s0: SegRef, s1: SegRef) {
+        self.contour_next[s0.0] = s1;
+        self.contour_prev[s1.0] = s0;
     }
 }
 
@@ -902,6 +761,7 @@ impl Sweeper {
         }
 
         for (&i, &j) in cyclic_pairs(&new_segs) {
+            self.segments.add_contour_link(i, j);
             self.queue
                 .push(SweepEvent::from_adjacent_segments(i, j, &self.segments));
         }
@@ -1024,42 +884,5 @@ mod tests {
         assert_eq!(c.approx_intersection_y(&a, eps).unwrap(), 5.0);
         assert_eq!(b.approx_intersection_y(&c, eps).unwrap(), 5.0);
         assert_eq!(c.approx_intersection_y(&b, eps).unwrap(), 5.0);
-    }
-
-    #[test]
-    fn exact_intersection() {
-        let a = ExactSegment::from(Segment {
-            start: Point::new(0.0, 0.0),
-            end: Point::new(0.0, 1.0),
-        });
-
-        let b = ExactSegment::from(Segment {
-            start: Point::new(0.0, 0.0),
-            end: Point::new(0.0, 0.99),
-        });
-
-        let c = ExactSegment::from(Segment {
-            start: Point::new(-1.0, 1.0),
-            end: Point::new(1.0, 1.0),
-        });
-
-        let d = ExactSegment::from(Segment {
-            start: Point::new(0.0, 1.0),
-            end: Point::new(0.0, 2.0),
-        });
-
-        assert_eq!(a.intersection_y(&b).unwrap(), 0.99);
-        assert_eq!(b.intersection_y(&a).unwrap(), 0.99);
-        assert_eq!(a.intersection_y(&c).unwrap(), 1);
-        assert_eq!(c.intersection_y(&a).unwrap(), 1);
-        assert_eq!(b.intersection_y(&c), None);
-        assert_eq!(c.intersection_y(&b), None);
-
-        assert_eq!(a.intersection_y(&d).unwrap(), 1);
-        assert_eq!(d.intersection_y(&a).unwrap(), 1);
-        assert_eq!(b.intersection_y(&d), None);
-        assert_eq!(d.intersection_y(&b), None);
-        assert_eq!(c.intersection_y(&d).unwrap(), 1);
-        assert_eq!(d.intersection_y(&c).unwrap(), 1);
     }
 }
