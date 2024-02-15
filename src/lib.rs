@@ -8,6 +8,7 @@ use ordered_float::NotNan;
 
 type Float = NotNan<f64>;
 
+pub mod equivalence;
 pub mod exact;
 
 // Points are sorted by `y` and then by `x`
