@@ -701,19 +701,38 @@ impl SweepLine {
     ) -> Vec<GroupedIntersection> {
         assert!(intersections.iter().all(|int| int.y == self.y));
 
+        // All segments that intersect at this scan line get divided into equivalence classes,
+        // so that we can declare a common intersection point for each class.
         let mut equiv = equivalence::Equiv::default();
         let mut horizontals = Vec::new();
         let mut grouped = Vec::new();
         for int in intersections {
-            if arena.get(int.i).is_exactly_horizontal() {
-                horizontals.push(int.i);
-                continue;
+            let i_horiz = arena.get(int.i).is_exactly_horizontal();
+            let j_horiz = arena.get(int.j).is_exactly_horizontal();
+
+            // Don't mark horizontal segments as being equivalent to the thing
+            // they intersect, or we will end up marking too many things as
+            // equivalent. We'll handle the horizontal intersections later.
+            // FIXME: If one path has two horizontal segments in a row, we'll miss
+            // their intersection point. We should handle that in an additional
+            // preprocessing step, where we merge those adjacent horizontal segments.
+            match (i_horiz, j_horiz) {
+                (true, true) => {
+                    horizontals.push(int.i);
+                    horizontals.push(int.j);
+                }
+                (true, false) => {
+                    horizontals.push(int.i);
+                    equiv.add_singleton(int.j);
+                }
+                (false, true) => {
+                    horizontals.push(int.j);
+                    equiv.add_singleton(int.i);
+                }
+                (false, false) => {
+                    equiv.add_equivalence(int.i, int.j);
+                }
             }
-            if arena.get(int.j).is_exactly_horizontal() {
-                horizontals.push(int.j);
-                continue;
-            }
-            equiv.add_equivalence(int.i, int.j);
         }
 
         // Assign an initial point to each intersection group. They might not have the right order.
@@ -755,11 +774,24 @@ impl SweepLine {
         });
 
         let mut running_max = Float::new(f64::NEG_INFINITY).unwrap();
-        for g in &mut grouped {
-            // We could assert here that g.p.x is at least running_max - eps, but we don't know eps here...
-            g.p.x = g.p.x.max(running_max);
-            running_max = g.p.x;
+        let mut grouped_and_ordered = Vec::new();
+        for g in grouped {
+            if g.p.x > running_max {
+                running_max = g.p.x;
+                grouped_and_ordered.push(g);
+            } else {
+                // We could assert here that g.p.x is at least running_max - eps, but we don't know eps here...
+                //
+                // running_max starts at negative infinity, and all coordinates are finite.
+                // So if we get here then grouped_and_ordered is non-empty.
+                grouped_and_ordered
+                    .last_mut()
+                    .unwrap()
+                    .segments
+                    .extend(g.segments);
+            }
         }
+        grouped = grouped_and_ordered;
 
         for seg_ref in horizontals {
             let seg = arena.get(seg_ref);
@@ -771,9 +803,6 @@ impl SweepLine {
                 }
             }
         }
-
-        // FIXME: handle intersections between horizontal lines that don't intersect any non-horizontal lines
-        // For every horizontal line, there should be a GroupedIntersection at its start and at its end.
 
         grouped
     }

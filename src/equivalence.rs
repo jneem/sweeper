@@ -36,6 +36,12 @@ impl<T: std::hash::Hash + Eq> Equiv<T> {
         }
     }
 
+    pub fn add_singleton(&mut self, t: T) {
+        if self.find_set(&t).is_none() {
+            self.sets.push(std::iter::once(t).collect());
+        }
+    }
+
     pub fn equivalences(&self) -> impl Iterator<Item = &HashSet<T>> {
         self.sets.iter()
     }
