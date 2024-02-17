@@ -808,12 +808,17 @@ impl SweepLine {
     }
 }
 
+// All the vecs here have the same length and same indexing.
 #[derive(Debug, Default)]
 pub struct SegmentArena {
     pub all_segments: Vec<Segment>,
     in_order: Vec<bool>,
     contour_next: Vec<SegRef>,
     contour_prev: Vec<SegRef>,
+    // TODO: include the winding numbers with the subdivision.
+    // (maybe this should go elsewhere? everything else in SegmentArena is constructed
+    // before sweeping the line...)
+    subdivision: Vec<Vec<Point>>,
 }
 
 impl SegmentArena {
@@ -837,6 +842,7 @@ impl SegmentArena {
         let seg = SegRef(self.all_segments.len() - 1);
         self.contour_next.push(seg);
         self.contour_prev.push(seg);
+        self.subdivision.push(Vec::new());
         seg
     }
 
@@ -844,6 +850,73 @@ impl SegmentArena {
     pub fn add_contour_link(&mut self, s0: SegRef, s1: SegRef) {
         self.contour_next[s0.0] = s1;
         self.contour_prev[s1.0] = s0;
+    }
+
+    pub fn add_segment_point(&mut self, s: SegRef, p: Point) {
+        self.subdivision[s.0].push(p);
+    }
+
+    /// As long as the intersections are sorted (y increasing and then x
+    /// increasing), the subdivisions of each segment will also be sorted.
+    pub fn add_subdivisions(&mut self, intersections: &[GroupedIntersection]) {
+        for int in intersections {
+            for seg in &int.segments {
+                self.subdivision[seg.0].push(int.p);
+            }
+        }
+    }
+
+    /// This can only be called after creating all the subdivisions.
+    /// (TODO: better API)
+    pub fn path_iter(&self, seg: SegRef) -> PathIter<'_> {
+        PathIter::new(self, seg)
+    }
+}
+
+pub struct PathIter<'a> {
+    arena: &'a SegmentArena,
+    start_seg: SegRef,
+    seg: SegRef,
+    points: std::slice::Iter<'a, Point>,
+}
+
+impl<'a> PathIter<'a> {
+    pub fn new(arena: &'a SegmentArena, seg: SegRef) -> Self {
+        PathIter {
+            arena,
+            start_seg: seg,
+            seg,
+            points: arena.subdivision[seg.0].iter(),
+        }
+    }
+
+    fn next_on_current_seg(&mut self) -> Option<Point> {
+        if self.arena.in_order[self.seg.0] {
+            self.points.next().copied()
+        } else {
+            self.points.next_back().copied()
+        }
+    }
+}
+
+impl<'a> Iterator for PathIter<'a> {
+    type Item = Point;
+    fn next(&mut self) -> Option<Point> {
+        match self.next_on_current_seg() {
+            Some(p) => Some(p),
+            None => {
+                self.seg = self.arena.contour_next[self.seg.0];
+                if self.seg == self.start_seg {
+                    return None;
+                }
+                self.points = self.arena.subdivision[self.seg.0].iter();
+
+                // Discard the first point on this segment because it was also
+                // the last point on the previous one.
+                self.next_on_current_seg();
+                self.next_on_current_seg()
+            }
+        }
     }
 }
 
@@ -876,15 +949,18 @@ impl Sweeper {
     }
 
     pub fn run(&mut self) {
-        dbg!(&self);
+        //dbg!(&self);
         while !self.queue.is_empty() {
             let intersections = self.run_one_y();
-            dbg!(&self.sweep_line, &self.queue, &intersections);
+            self.segments.add_subdivisions(&intersections);
+            //dbg!(&self.sweep_line, &self.queue, &intersections);
             self.sweep_line
                 .check_invariants(self.eps, &self.segments, &self.queue)
                 .unwrap();
         }
-        dbg!(&self.intersections);
+        // Every segment should have at least a start and an endpoint.
+        assert!(self.segments.subdivision.iter().all(|s| s.len() >= 2));
+        //dbg!(&self.intersections);
     }
 
     pub fn run_one_y(&mut self) -> Vec<GroupedIntersection> {
@@ -972,6 +1048,7 @@ mod tests {
         ]);
 
         sweeper.run();
+        dbg!(sweeper.segments.path_iter(SegRef(0)).collect::<Vec<_>>());
     }
 
     #[test]
@@ -994,6 +1071,7 @@ mod tests {
         ]);
 
         sweeper.run();
+        dbg!(sweeper.segments.path_iter(SegRef(0)).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1018,6 +1096,7 @@ mod tests {
         ]);
 
         sweeper.run();
+        dbg!(sweeper.segments.path_iter(SegRef(0)).collect::<Vec<_>>());
     }
 
     #[test]
