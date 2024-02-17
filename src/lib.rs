@@ -452,6 +452,10 @@ impl EventQueue {
     pub fn pop(&mut self) -> Option<SweepEvent> {
         self.inner.pop().map(|Reverse(x)| x)
     }
+
+    pub fn peek(&self) -> Option<&SweepEvent> {
+        self.inner.peek().map(|Reverse(x)| x)
+    }
 }
 
 impl std::fmt::Debug for EventQueue {
@@ -553,11 +557,12 @@ impl SweepLine {
     }
 
     fn find_seg_ref(&self, seg: SegRef) -> usize {
+        self.maybe_find_seg_ref(seg).expect("missing seg ref")
+    }
+
+    fn maybe_find_seg_ref(&self, seg: SegRef) -> Option<usize> {
         // TODO: should be able to do this in logarithmic time
-        self.segments
-            .iter()
-            .position(|s| s == &seg)
-            .expect("missing seg ref")
+        self.segments.iter().position(|s| s == &seg)
     }
 
     fn scan_left(&mut self, ctx: &mut SweepContext, mut idx: usize, allow_swap: bool) -> usize {
@@ -599,9 +604,7 @@ impl SweepLine {
             let seg = ctx.segments.get(self.segments[j]);
             // TODO: this also counts crossings of segments that are adjacent in
             // the contour. It's harmless, but we can filter them out
-            dbg!(self.segments[idx], self.segments[j]);
-            let (crosses, interaction) =
-                dbg!(scanning_seg.compare_to_the_right(&seg, self.y, ctx.eps));
+            let (crosses, interaction) = scanning_seg.compare_to_the_right(&seg, self.y, ctx.eps);
             match crosses {
                 Crosses::At { y } => ctx.queue.push(SweepEvent::intersection(
                     self.segments[idx],
@@ -690,6 +693,90 @@ impl SweepLine {
             }
         }
     }
+
+    pub fn realize_intersections(
+        &self,
+        intersections: &[Intersection],
+        arena: &SegmentArena,
+    ) -> Vec<GroupedIntersection> {
+        assert!(intersections.iter().all(|int| int.y == self.y));
+
+        let mut equiv = equivalence::Equiv::default();
+        let mut horizontals = Vec::new();
+        let mut grouped = Vec::new();
+        for int in intersections {
+            if arena.get(int.i).is_exactly_horizontal() {
+                horizontals.push(int.i);
+                continue;
+            }
+            if arena.get(int.j).is_exactly_horizontal() {
+                horizontals.push(int.j);
+                continue;
+            }
+            equiv.add_equivalence(int.i, int.j);
+        }
+
+        // Assign an initial point to each intersection group. They might not have the right order.
+        for set in equiv.equivalences() {
+            grouped.push(GroupedIntersection {
+                segments: set.clone(),
+                p: Point {
+                    x: (mid_range(set.iter().map(|seg| arena.get(*seg).at_y(self.y)))),
+                    y: self.y,
+                },
+            })
+        }
+
+        // Note that not every segment in our intersections is still in the sweep line; there
+        // might be a segment that just exited.
+        //
+        // Ignoring the horizontal segments, the intersection groups should be strictly ordered
+        // by our sweep line order, in that if any member of group 1 comes before any member of group 2,
+        // then all members of group 1 come before all members of group 2. The intersection groups can
+        // also be ordered by x coordinate. However, there is no guarantee that the ordering by sweep line
+        // agrees with the ordering by x coordinate. Here, we force that to be the case by modifying the
+        // x coordinates if necessary.
+        grouped.sort_by(|g, h| {
+            // Find the sweep-line position of *some* segment from the group. It shouldn't matter which.
+            // The group might not have any segment in the sweep line (e.g. if it's from an exit-exit intersection).
+            let g_idx = g
+                .segments
+                .iter()
+                .find_map(|seg| self.maybe_find_seg_ref(*seg));
+            let h_idx = h
+                .segments
+                .iter()
+                .find_map(|seg| self.maybe_find_seg_ref(*seg));
+            if let (Some(g_idx), Some(h_idx)) = (g_idx, h_idx) {
+                g_idx.cmp(&h_idx)
+            } else {
+                g.p.x.cmp(&h.p.x)
+            }
+        });
+
+        let mut running_max = Float::new(f64::NEG_INFINITY).unwrap();
+        for g in &mut grouped {
+            // We could assert here that g.p.x is at least running_max - eps, but we don't know eps here...
+            g.p.x = g.p.x.max(running_max);
+            running_max = g.p.x;
+        }
+
+        for seg_ref in horizontals {
+            let seg = arena.get(seg_ref);
+            // TODO: could use a binary search here
+            let interval = seg.start.x..=seg.end.x;
+            for group in &mut grouped {
+                if interval.contains(&group.p.x) {
+                    group.segments.insert(seg_ref);
+                }
+            }
+        }
+
+        // FIXME: handle intersections between horizontal lines that don't intersect any non-horizontal lines
+        // For every horizontal line, there should be a GroupedIntersection at its start and at its end.
+
+        grouped
+    }
 }
 
 #[derive(Debug, Default)]
@@ -762,13 +849,28 @@ impl Sweeper {
     pub fn run(&mut self) {
         dbg!(&self);
         while !self.queue.is_empty() {
-            self.step();
-            dbg!(&self.sweep_line, &self.queue);
+            let intersections = self.run_one_y();
+            dbg!(&self.sweep_line, &self.queue, &intersections);
             self.sweep_line
                 .check_invariants(self.eps, &self.segments, &self.queue)
                 .unwrap();
         }
         dbg!(&self.intersections);
+    }
+
+    pub fn run_one_y(&mut self) -> Vec<GroupedIntersection> {
+        let intersection_len = self.intersections.len();
+        self.step();
+        let y = self.sweep_line.y;
+        while let Some(ev) = self.queue.peek() {
+            if ev.y > y {
+                break;
+            }
+            self.step();
+        }
+
+        self.sweep_line
+            .realize_intersections(&self.intersections[intersection_len..], &self.segments)
     }
 
     pub fn add_closed_polyline(&mut self, points: &[Point]) {
@@ -802,13 +904,27 @@ pub fn preprocess_horizontal_segments(points: &[Point]) -> Vec<Point> {
     ret
 }
 
+#[derive(Debug)]
+pub struct GroupedIntersection {
+    pub p: Point,
+    pub segments: HashSet<SegRef>,
+}
+
+fn mid_range(xs: impl Iterator<Item = Float>) -> Float {
+    let (min, max) = xs
+        .map(|x| (x, x))
+        .reduce(|(lo, hi), (x, y)| (lo.min(x), hi.max(y)))
+        .unwrap();
+    (min + max) / 2.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // TODO: test these small examples with perturbations
     #[test]
-    fn small_example() {
+    fn small_example_basic() {
         let mut sweeper = Sweeper {
             sweep_line: SweepLine::default(),
             queue: EventQueue::default(),

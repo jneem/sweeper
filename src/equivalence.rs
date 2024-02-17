@@ -1,9 +1,14 @@
 use std::collections::HashSet;
 
 /// A quick (to write, not to execute) and hacky algorithm for resolving equivalence relations.
-#[derive(Default)]
 pub struct Equiv<T> {
     sets: Vec<HashSet<T>>,
+}
+
+impl<T> Default for Equiv<T> {
+    fn default() -> Self {
+        Equiv { sets: Vec::new() }
+    }
 }
 
 impl<T: std::hash::Hash + Eq> Equiv<T> {
