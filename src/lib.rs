@@ -393,6 +393,7 @@ impl std::fmt::Debug for SweepEventPayload {
     }
 }
 
+#[derive(Clone)]
 pub struct SweepLine {
     pub y: Float,
     pub segments: Vec<SegRef>,
@@ -866,6 +867,10 @@ impl SegmentArena {
         }
     }
 
+    pub fn subdivisions(&self, s: SegRef) -> &[Point] {
+        &self.subdivision[s.0]
+    }
+
     /// This can only be called after creating all the subdivisions.
     /// (TODO: better API)
     pub fn path_iter(&self, seg: SegRef) -> PathIter<'_> {
@@ -951,8 +956,14 @@ impl Sweeper {
     pub fn run(&mut self) {
         //dbg!(&self);
         while !self.queue.is_empty() {
+            let last_sweep = self.sweep_line.clone();
             let intersections = self.run_one_y();
             self.segments.add_subdivisions(&intersections);
+            let ordered_intersections: Vec<_> = intersections
+                .into_iter()
+                .map(|int| int.sort(&last_sweep, &self.sweep_line, &self.segments))
+                .collect();
+            dbg!(ordered_intersections);
             //dbg!(&self.sweep_line, &self.queue, &intersections);
             self.sweep_line
                 .check_invariants(self.eps, &self.segments, &self.queue)
@@ -1013,6 +1024,121 @@ pub fn preprocess_horizontal_segments(points: &[Point]) -> Vec<Point> {
 pub struct GroupedIntersection {
     pub p: Point,
     pub segments: HashSet<SegRef>,
+}
+
+impl GroupedIntersection {
+    // Assumes we have just added next_sweep's subdivisions to the segment arena.
+    pub fn sort(
+        &self,
+        prev_sweep: &SweepLine,
+        next_sweep: &SweepLine,
+        segments: &SegmentArena,
+    ) -> OrderedIntersection {
+        let mut endpoints = Vec::new();
+
+        let mut prev_segments: Vec<_> = self
+            .segments
+            .iter()
+            .filter_map(|seg| prev_sweep.maybe_find_seg_ref(*seg).map(|idx| (idx, seg)))
+            .collect();
+        prev_segments.sort();
+
+        // Add segments from the previous sweep line, from right to left (because they're below us).
+        endpoints.extend(prev_segments.into_iter().rev().map(|(_, &seg)| {
+            assert_eq!(&self.p, segments.subdivisions(seg).last().unwrap());
+            EndpointRef {
+                seg,
+                // Because we've just added next_sweep's subdivisions to the segment arena,
+                // the last subdivision of this segment should be self.p; we want the previous segment.
+                subdivision_idx: segments.subdivisions(seg).len() - 2,
+            }
+        }));
+
+        let horiz_segments: Vec<_> = self
+            .segments
+            .iter()
+            .filter(|seg| segments.get(**seg).is_exactly_horizontal())
+            .filter_map(|seg| {
+                next_sweep.maybe_find_seg_ref(*seg)?;
+                let sub_idx = segments
+                    .subdivisions(*seg)
+                    .binary_search_by_key(&self.p.x, |q| q.x)
+                    .unwrap();
+                Some((*seg, sub_idx, segments.subdivisions(*seg).len()))
+            })
+            .collect();
+
+        // Add left-pointing horizontal segments from the current sweep line.
+        endpoints.extend(
+            horiz_segments
+                .iter()
+                .filter_map(|(seg, sub_idx, _sub_idx_count)| {
+                    // The subdivisions are listed left to right. As long as we aren't at the first subdivision
+                    // point, there's a segment to the left.
+                    sub_idx.checked_sub(1).map(|i| EndpointRef {
+                        seg: *seg,
+                        subdivision_idx: i,
+                    })
+                }),
+        );
+
+        // Add segments from the next sweep line, from left to right (because they're above us).
+        let mut next_segments: Vec<_> = self
+            .segments
+            .iter()
+            .filter_map(|seg| {
+                if segments.get(*seg).is_exactly_horizontal() {
+                    None
+                } else {
+                    next_sweep.maybe_find_seg_ref(*seg).map(|idx| (idx, seg))
+                }
+            })
+            .collect();
+        next_segments.sort();
+        endpoints.extend(next_segments.into_iter().map(|(_, &seg)| {
+            assert_eq!(&self.p, segments.subdivisions(seg).last().unwrap());
+            EndpointRef {
+                seg,
+                // Because we've just added next_sweep's subdivisions to the segment arena,
+                // the last subdivision of this segment should be self.p; we want the next subdivision
+                // (which hasn't been added yet, because this segment extends past the current sweep-line).
+                subdivision_idx: segments.subdivisions(seg).len(),
+            }
+        }));
+
+        // Add right-pointing horizontal segments from the current sweep line.
+        endpoints.extend(
+            horiz_segments
+                .iter()
+                .filter(|&&(_seg, sub_idx, sub_idx_count)| {
+                    // As long as we aren't at the last subdivision point, there's a segment to the right.
+                    sub_idx + 1 < sub_idx_count
+                })
+                .map(|&(seg, sub_idx, _sub_idx_count)| EndpointRef {
+                    seg,
+                    subdivision_idx: sub_idx + 1,
+                }),
+        );
+
+        OrderedIntersection {
+            p: self.p,
+            endpoints,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct EndpointRef {
+    pub seg: SegRef,
+    pub subdivision_idx: usize,
+}
+
+#[derive(Debug)]
+pub struct OrderedIntersection {
+    pub p: Point,
+
+    // Other endpoints of segment subdivisions, in clockwise order.
+    pub endpoints: Vec<EndpointRef>,
 }
 
 fn mid_range(xs: impl Iterator<Item = Float>) -> Float {
