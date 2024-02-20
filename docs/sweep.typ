@@ -2,6 +2,7 @@
 
 #show: thmrules
 #let lemma = thmbox("lemma", "Lemma")
+#let def = thmbox("definition", "Definition")
 
 We'll be talking about sweep line algorithms, where the sweep line is horizontal and increasing in $y$.
 Therefore, every line segment "starts" at the coordinate with smaller $y$ and "ends" at the coordinate
@@ -17,12 +18,6 @@ Define a relation $lt.curly_(y,epsilon)$ on line segments whose domain contains 
 $alpha lt.curly_(y,epsilon) beta$ if $alpha(y) + epsilon < beta(y)$.
 Despite our choice of symbol, this is not necessarily transitive.
 
-Define a relation $tilde.op_(y,epsilon)$ on line segments whose domain contains $y$, where
-$alpha tilde.op_(y, epsilon) beta$ if
-the two line segments are within $epsilon$ of one another from $y$ up until the first time when one of them
-ends. That is,
-$alpha tilde.op_(y, epsilon) beta$ if $|alpha(y') - beta(y')| <= epsilon$ for all $y' in [y, "min"(y_1 (alpha), y_1 (beta))]$.
-
 == The insertion philosophy
 
 We're starting with continuous closed paths, and we want to finish with
@@ -33,17 +28,40 @@ careful about the topology. This is a little tricky because for a sweep line
 it can be numerically hard to check how the segments are ordered. So we don't
 claim to find all the intersection points between all the segments, but we do
 try to ensure some "large-scale" correctness of the intersections: if you
-consider two sweep-lines and two continuous path going between them that are
+consider two sweep-lines and two continuous paths going between them that are
 sufficiently far from one another at the sweep-lines, then the number of intersections
 we find between those paths will have the correct parity.
 
-In order to track the continuity of the paths, each "enter" and "leave" event
-will keep track of the line segments before *and* after the vertex.
-We *never split segments*. This is handy because splitting segments means perturbing
-them, which can mess up our invariants. Instead, we record intersections like "segment $alpha$
-intersected segment $beta$ at height $y$; before this, $alpha$ was to the right of $beta$".
-The approximate $x$ coordinate of the intersection can be obtained in a later pass. (And probably
-that pass can also perturb the line segments so that the intersections become exact.)
+At our first pass, we won't try to detect intersections at all. Instead, we'll produce
+a continuum of sweep-lines (constant except at a finite number of points) that *approximately*
+track the horizontal order of the segments.
+
+#def[
+The ordered collection $(alpha^1, ..., alpha^m)$ of line segments is #emph[$epsilon$-ordered at $y$]
+if each $alpha^i$ has $y$ in its domain and $alpha^i lt.curly_(y,epsilon) alpha^j$ for all $1 <= i < j <= m$.
+]
+
+To be precise, our algorithm will produce a family of sweep-lines that are $epsilon$-ordered at every $y$
+(and also #emph[complete] in the sense that the sweep-line at $y$ will contain all line segments whose
+domain contains $y$). This seems weaker than finding all the intersections (for example, because if you
+find all intersections you can use them to produce a completely ordered family of sweep-lines), but
+in fact they're more-or-less equivalent. One way to see this is to note that intersection points
+can be tracked (to within a horizontal $epsilon$) by checking when segments change order in the sweep-line.
+But also, I'm pretty sure this is true:
+
+#lemma[
+If $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$ then there exist $x^1 <= ... <= x^m$ such that
+$|alpha^i (y) - x^i| <= epsilon$ for all $i$.
+]
+
+So once we have our family of approximate sweep-lines, we can go back and perturb the lines so that our
+approximate ordering is exact.
+
+One consequence of our approximate approach is that we need to do a little extra bookkeeping to maintain
+the continuity of the input paths: when one segment exits and its path-neighbor enters, we need to remember
+that they are connected because the approximate sweep-line might not keep them together.
+For this reason, the current implementation of the algorithm tracks "enter" and "exit" events
+in pairs.
 
 == The sweep-line invariants
 
@@ -57,6 +75,13 @@ We will maintain a sorted-ish "sweep-line" data structure $(alpha^1, ..., alpha^
 
 (We say that $alpha^j$ $epsilon$-crosses $alpha^i$ at $y'$ if $j < i$ and $alpha^j gt.curly_(y',epsilon) alpha^i$
 or $i < j$ and $alpha^i gt.curly_(y',epsilon) alpha^j$.)
+
+The first two invariants are just a rephrasing of the requirement that our sweep-line be $epsilon$-ordered.
+Our last invariant is essentially a robust variant of the Bentley-Ottmann rule. In the exact Bentley-Ottmann algorithm,
+you only need to compare a segment to the ones below and above it in the sweep-line; the structure of the algorithm
+ensures that if your segment intersects something else then you'll have a chance to process that intersection while
+handling some future sweep-line event. Our last invariant says exactly this: whenever two segments robustly intersect,
+we'll have an event in the queue that will allow us to witness this.
 
 == Sweeping the sweep line
 
