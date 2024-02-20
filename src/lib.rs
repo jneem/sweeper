@@ -695,6 +695,9 @@ impl SweepLine {
         }
     }
 
+    // FIXME: this approach of using equivalence classes of intersections is ok topologically
+    // but not geometrically: it might end up moving segments more than epsilon horizontally.
+    // In order to fix this, I think we might need to allow extra horizontal pieces.
     pub fn realize_intersections(
         &self,
         intersections: &[Intersection],
@@ -807,6 +810,28 @@ impl SweepLine {
 
         grouped
     }
+
+    /// Finds the first (non-horizontal) segment before an intersection.
+    ///
+    /// Returns None if this intersection has no non-horizontal segments on this scan line.
+    fn segment_before_grouped_intersection(
+        &self,
+        int: &GroupedIntersection,
+        segments: &SegmentArena,
+    ) -> Option<SegRef> {
+        // FIXME: what if the group only contains horizontal segments?
+        // unwrap: grouped intersections should always be non-empty.
+        let idx = int
+            .segments
+            .iter()
+            .filter(|seg| !segments.get(**seg).is_exactly_horizontal())
+            .find_map(|seg| self.maybe_find_seg_ref(*seg))?;
+
+        (0..idx)
+            .rev()
+            .map(|i| self.segments[i])
+            .find(|seg| !int.segments.contains(seg) && !segments.get(*seg).is_exactly_horizontal())
+    }
 }
 
 // All the vecs here have the same length and same indexing.
@@ -820,6 +845,7 @@ pub struct SegmentArena {
     // (maybe this should go elsewhere? everything else in SegmentArena is constructed
     // before sweeping the line...)
     subdivision: Vec<Vec<Point>>,
+    winding: Vec<Vec<i32>>,
 }
 
 impl SegmentArena {
@@ -844,6 +870,7 @@ impl SegmentArena {
         self.contour_next.push(seg);
         self.contour_prev.push(seg);
         self.subdivision.push(Vec::new());
+        self.winding.push(Vec::new());
         seg
     }
 
@@ -869,6 +896,76 @@ impl SegmentArena {
 
     pub fn subdivisions(&self, s: SegRef) -> &[Point] {
         &self.subdivision[s.0]
+    }
+
+    pub fn windings(&self, s: SegRef) -> &[i32] {
+        &self.winding[s.0]
+    }
+
+    pub fn add_winding(&mut self, s: SegRef, w: i32) {
+        self.winding[s.0].push(w);
+    }
+
+    pub fn extend_windings(
+        &mut self,
+        intersections: &[GroupedIntersection],
+        ordered: &[OrderedIntersection],
+        prev_sweep: &SweepLine,
+        sweep: &SweepLine,
+    ) {
+        // The winding number of the region to the right (and slightly above) the previous intersection.
+        let mut prev_right_winding: Option<i32> = None;
+        for (int, ordered) in intersections.iter().zip(ordered) {
+            let left_winding = if let Some(prev_seg) =
+                sweep.segment_before_grouped_intersection(dbg!(int), self)
+            {
+                let order_offset = if self.in_order(prev_seg) { 0 } else { -1 };
+                // We're computing winding numbers in order, so the previous one should have been computed.
+                self.windings(dbg!(prev_seg)).last().unwrap() + order_offset
+            } else if let Some(prev_winding) = prev_right_winding {
+                // This intersection has nothing pointing up, so
+                // its winding number is the same as the right winding of the
+                // preceding intersection. There can't be a segment between
+                // this intersection and the preceding one, because that segment
+                // would intersect with the horizontal segment leading left from
+                // this intersection.
+                prev_winding
+            } else if let Some(prev_seg) = prev_sweep.segment_before_grouped_intersection(int, self)
+            {
+                let order_offset = if self.in_order(prev_seg) { 0 } else { -1 };
+                // There's no intersection before us (which implies that we
+                // don't have a horizontal segment pointing left) and we have
+                // something coming from below. Our winding number comes from
+                // the previous segment in the previous sweep-line.
+                // It's the last subdivision of that segment, because if there were
+                // a newer subdivision, we would have had a prior intersection.
+                self.windings(prev_seg).last().unwrap() + order_offset
+            } else {
+                // We must be left-most.
+                0
+            };
+
+            for (e, local) in ordered.endpoints.iter().zip(&ordered.winding) {
+                let subs = self.subdivisions(e.seg);
+                let increasing =
+                    e.subdivision_idx >= subs.len() || subs[e.subdivision_idx] > ordered.p;
+                let outwards = increasing == self.in_order(e.seg);
+
+                // We only add windings numbers for increasing segments (so we only add each one once).
+                // left_winding + local is the winding number of the region just counter-clockwise of this
+                // segment. If we're oriented inwards, that's the region to the right of the segment.
+                if increasing {
+                    let w = if outwards {
+                        left_winding + *local + 1
+                    } else {
+                        left_winding + *local
+                    };
+                    self.add_winding(e.seg, w);
+                }
+            }
+
+            prev_right_winding = Some(left_winding + ordered.right_winding(self));
+        }
     }
 
     /// This can only be called after creating all the subdivisions.
@@ -960,10 +1057,16 @@ impl Sweeper {
             let intersections = self.run_one_y();
             self.segments.add_subdivisions(&intersections);
             let ordered_intersections: Vec<_> = intersections
-                .into_iter()
+                .iter()
                 .map(|int| int.sort(&last_sweep, &self.sweep_line, &self.segments))
                 .collect();
-            dbg!(ordered_intersections);
+            dbg!(&ordered_intersections);
+            self.segments.extend_windings(
+                &intersections,
+                &ordered_intersections,
+                &last_sweep,
+                &self.sweep_line,
+            );
             //dbg!(&self.sweep_line, &self.queue, &intersections);
             self.sweep_line
                 .check_invariants(self.eps, &self.segments, &self.queue)
@@ -972,6 +1075,7 @@ impl Sweeper {
         // Every segment should have at least a start and an endpoint.
         assert!(self.segments.subdivision.iter().all(|s| s.len() >= 2));
         //dbg!(&self.intersections);
+        dbg!(&self.segments);
     }
 
     pub fn run_one_y(&mut self) -> Vec<GroupedIntersection> {
@@ -1027,6 +1131,25 @@ pub struct GroupedIntersection {
 }
 
 impl GroupedIntersection {
+    fn winding_increment(
+        &self,
+        seg: SegRef,
+        subdivision_idx: usize,
+        segments: &SegmentArena,
+    ) -> i32 {
+        let subs = segments.subdivisions(seg);
+        // Is the endpoint of this segment "larger" than self.p?
+        // For segments going from the current sweep line to the next, subdivision_idx can
+        // point past the end.
+        let increasing = subdivision_idx >= subs.len() || subs[subdivision_idx] > self.p;
+
+        if increasing == segments.in_order(seg) {
+            1
+        } else {
+            -1
+        }
+    }
+
     // Assumes we have just added next_sweep's subdivisions to the segment arena.
     pub fn sort(
         &self,
@@ -1036,27 +1159,11 @@ impl GroupedIntersection {
     ) -> OrderedIntersection {
         let mut endpoints = Vec::new();
 
-        let mut prev_segments: Vec<_> = self
-            .segments
-            .iter()
-            .filter_map(|seg| prev_sweep.maybe_find_seg_ref(*seg).map(|idx| (idx, seg)))
-            .collect();
-        prev_segments.sort();
-
-        // Add segments from the previous sweep line, from right to left (because they're below us).
-        endpoints.extend(prev_segments.into_iter().rev().map(|(_, &seg)| {
-            assert_eq!(&self.p, segments.subdivisions(seg).last().unwrap());
-            EndpointRef {
-                seg,
-                // Because we've just added next_sweep's subdivisions to the segment arena,
-                // the last subdivision of this segment should be self.p; we want the previous segment.
-                subdivision_idx: segments.subdivisions(seg).len() - 2,
-            }
-        }));
-
         let horiz_segments: Vec<_> = self
             .segments
             .iter()
+            // TODO: if we allow for horizontal subdivisions in a non-horizontal segment,
+            // we'll need to test for horizontalness at the subdivision level
             .filter(|seg| segments.get(**seg).is_exactly_horizontal())
             .filter_map(|seg| {
                 next_sweep.maybe_find_seg_ref(*seg)?;
@@ -1067,20 +1174,6 @@ impl GroupedIntersection {
                 Some((*seg, sub_idx, segments.subdivisions(*seg).len()))
             })
             .collect();
-
-        // Add left-pointing horizontal segments from the current sweep line.
-        endpoints.extend(
-            horiz_segments
-                .iter()
-                .filter_map(|(seg, sub_idx, _sub_idx_count)| {
-                    // The subdivisions are listed left to right. As long as we aren't at the first subdivision
-                    // point, there's a segment to the left.
-                    sub_idx.checked_sub(1).map(|i| EndpointRef {
-                        seg: *seg,
-                        subdivision_idx: i,
-                    })
-                }),
-        );
 
         // Add segments from the next sweep line, from left to right (because they're above us).
         let mut next_segments: Vec<_> = self
@@ -1120,9 +1213,49 @@ impl GroupedIntersection {
                 }),
         );
 
+        let mut prev_segments: Vec<_> = self
+            .segments
+            .iter()
+            .filter_map(|seg| prev_sweep.maybe_find_seg_ref(*seg).map(|idx| (idx, seg)))
+            .collect();
+        prev_segments.sort();
+
+        // Add segments from the previous sweep line, from right to left (because they're below us).
+        endpoints.extend(prev_segments.into_iter().rev().map(|(_, &seg)| {
+            assert_eq!(&self.p, segments.subdivisions(seg).last().unwrap());
+            EndpointRef {
+                seg,
+                // Because we've just added next_sweep's subdivisions to the segment arena,
+                // the last subdivision of this segment should be self.p; we want the previous segment.
+                subdivision_idx: segments.subdivisions(seg).len() - 2,
+            }
+        }));
+
+        // Add left-pointing horizontal segments from the current sweep line.
+        endpoints.extend(
+            horiz_segments
+                .iter()
+                .filter_map(|(seg, sub_idx, _sub_idx_count)| {
+                    // The subdivisions are listed left to right. As long as we aren't at the first subdivision
+                    // point, there's a segment to the left.
+                    sub_idx.checked_sub(1).map(|i| EndpointRef {
+                        seg: *seg,
+                        subdivision_idx: i,
+                    })
+                }),
+        );
+
+        let mut winding = Vec::new();
+        let mut w = 0;
+        for e in &endpoints {
+            winding.push(w);
+            w += self.winding_increment(e.seg, e.subdivision_idx, segments);
+        }
+
         OrderedIntersection {
             p: self.p,
             endpoints,
+            winding,
         }
     }
 }
@@ -1139,6 +1272,22 @@ pub struct OrderedIntersection {
 
     // Other endpoints of segment subdivisions, in clockwise order.
     pub endpoints: Vec<EndpointRef>,
+
+    // "Local" winding numbers. TODO: picture and explanation
+    pub winding: Vec<i32>,
+}
+
+impl OrderedIntersection {
+    /// Find the local winding number to the right of (and above) this intersection point.
+    pub fn right_winding(&self, segments: &SegmentArena) -> i32 {
+        let idx = self.endpoints.iter().position(|e| {
+            let subs = segments.subdivisions(e.seg);
+            e.subdivision_idx < subs.len() && subs[e.subdivision_idx].y < self.p.y
+        });
+
+        // If this intersection points doesn't stick out anything below, its right winding number is the same as its left one.
+        idx.map(|idx| self.winding[idx]).unwrap_or(0)
+    }
 }
 
 fn mid_range(xs: impl Iterator<Item = Float>) -> Float {
