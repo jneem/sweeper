@@ -1,6 +1,6 @@
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BinaryHeap, HashSet},
+    collections::{BinaryHeap, HashMap, HashSet},
 };
 
 use malachite::Rational;
@@ -10,265 +10,9 @@ type Float = NotNan<f64>;
 
 pub mod equivalence;
 pub mod exact;
+pub mod types;
 
-// Points are sorted by `y` and then by `x`
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Point {
-    pub y: Float,
-    pub x: Float,
-}
-
-impl Point {
-    pub fn new(x: f64, y: f64) -> Point {
-        Point {
-            x: NotNan::new(x).unwrap(),
-            y: NotNan::new(y).unwrap(),
-        }
-    }
-
-    // Panics on nans. Should be fine as long as everything is finite.
-    pub fn affine(self, other: Point, t: Float) -> Point {
-        let one = NotNan::new(1.0).unwrap();
-        Point {
-            x: (one - t) * self.x + t * other.x,
-            y: (one - t) * self.y + t * other.y,
-        }
-    }
-}
-
-impl std::ops::Sub for Point {
-    type Output = Vector;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Vector {
-            x: self.x - rhs.x,
-            y: self.y - rhs.y,
-        }
-    }
-}
-
-impl std::fmt::Debug for Point {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({:?}, {:?})", self.x.into_inner(), self.y.into_inner())
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Vector {
-    pub x: Float,
-    pub y: Float,
-}
-
-impl Vector {
-    pub fn cross(&self, other: Vector) -> f64 {
-        self.x.into_inner() * other.y.into_inner() - self.y.into_inner() * other.x.into_inner()
-    }
-
-    pub fn dot(&self, other: Vector) -> f64 {
-        self.x.into_inner() * other.x.into_inner() + self.y.into_inner() * other.y.into_inner()
-    }
-}
-
-// The start point of a line is always strictly less than its end point.
-// This is the right representation for most of the sweep-line operations,
-// but it's a little clunky for other things because we need to keep track of
-// the original orientation.
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Segment {
-    pub start: Point,
-    pub end: Point,
-}
-
-impl Segment {
-    /// The second return value is true if the original point order was preserved.
-    ///
-    /// Panics if the points are equal.
-    pub fn from_unordered_points(p0: Point, p1: Point) -> (Segment, bool) {
-        match p0.cmp(&p1) {
-            Ordering::Less => (Segment { start: p0, end: p1 }, true),
-            Ordering::Greater => (Segment { start: p1, end: p0 }, false),
-            Ordering::Equal => panic!("empty segment"),
-        }
-    }
-}
-
-impl std::fmt::Debug for Segment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} -- {:?}", self.start, self.end)
-    }
-}
-
-impl Segment {
-    pub fn eval(&self, t: Float) -> Point {
-        self.start.affine(self.end, t)
-    }
-
-    /// Our `x` coordinate at the given `y` coordinate.
-    ///
-    /// Horizontal segments will return their largest `x` coordinate.
-    ///
-    /// Panics if `y` is outside the `y` range of this segment.
-    pub fn at_y(&self, y: Float) -> Float {
-        assert!((self.start.y..=self.end.y).contains(&y));
-
-        if self.start.y == self.end.y {
-            self.end.x
-        } else {
-            // Even if the segment is *almost* horizontal, t is guaranteed
-            // to be in [0.0, 1.0].
-            let t = (y - self.start.y) / (self.end.y - self.start.y);
-            self.eval(t).x
-        }
-    }
-
-    /// Returns the x difference between segments at the last y position that they share.
-    /// Returns a positive value if `other` is to the right.
-    ///
-    /// (Returns nonsense if they don't share a y position.)
-    pub fn end_offset(&self, other: &Segment) -> Float {
-        if self.end.y < other.end.y {
-            other.at_y(self.end.y) - self.end.x
-        } else {
-            other.end.x - self.at_y(other.end.y)
-        }
-    }
-
-    /// Returns the x difference between segments at the first y position that they share.
-    /// Returns a positive value if `other` is to the right.
-    ///
-    /// (Returns nonsense if they don't share a y position.)
-    pub fn start_offset(&self, other: &Segment) -> Float {
-        if self.start.y >= other.start.y {
-            other.at_y(self.start.y) - self.start.x
-        } else {
-            other.start.x - self.at_y(other.start.y)
-        }
-    }
-
-    /// Returns the y-coordinate of the intersection between this segment and the other, if
-    /// there is one and we can get an accurate estimate of it.
-    ///
-    /// We guarantee that if this returns a y value, the two line segments have approximately
-    /// the same x-coordinate (within eps/2) at that y value.
-    ///
-    /// (Actually, we don't guarantee anything of the sort because I haven't done the analysis
-    /// yet. But that's the guarantee we need. We're allowed to assume that the lines aren't
-    /// close to horizontal.)
-    ///
-    /// This function is allowed to have false negatives (i.e. fail to find an intersection if
-    /// there is one but just barely). In this case the intersection will be caught by comparing
-    /// x coordinates along the sweep line.
-    pub fn approx_intersection_y(&self, other: &Segment, eps: Float) -> Option<Float> {
-        let u = self.end - self.start;
-        let v = other.end - other.start;
-        let w = other.start - self.start;
-
-        let det = u.cross(v);
-
-        // This probably isn't the right test. The guarantee we want is: at the y coordinate
-        // of intersection, guarantee that the x coordinates are at most eps/2 apart.
-        // Probably the real bound will need some assumption on the magnitudes of all the coordinates?
-        if det.abs() > eps.sqrt() {
-            let s = w.cross(v) / det;
-            let t = w.cross(u) / det;
-            if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
-                return Some(self.start.y + s * (self.end.y - self.start.y).into_inner());
-            }
-        }
-        None
-    }
-
-    pub fn is_exactly_horizontal(&self) -> bool {
-        self.start.y == self.end.y
-    }
-
-    // TODO: should this depend on epsilon? probably.
-    pub fn is_almost_horizontal(&self) -> bool {
-        (self.start.x - self.end.x).abs() >= 1e3 * (self.start.y - self.end.y).abs()
-    }
-
-    /// If the other segment starts to the left of us, what is the interaction like?
-    pub fn compare_to_the_left(
-        &self,
-        other: &Segment,
-        y: Float,
-        eps: Float,
-    ) -> (Crosses, Interaction) {
-        let start_offset = other.at_y(y) - self.at_y(y);
-        let end_offset = self.end_offset(other);
-
-        // TODO: explain why we shift the other guy
-        let y_int = self.approx_intersection_y(&other.shift_horizontal(eps / 2.0), eps);
-        let y_int = y_int
-            .filter(|z| z >= &y && !self.is_exactly_horizontal() && !other.is_exactly_horizontal());
-
-        if let Some(y) = y_int {
-            // Because of the shift, maybe there wasn't really an intersection. Or maybe
-            // the intersection was in the wrong direction.
-            if end_offset.into_inner() > 0.0 {
-                (Crosses::At { y }, Interaction::Blocks)
-            } else {
-                (Crosses::Never, Interaction::Ignores)
-            }
-        } else {
-            // No intersection, or there was an intersection but we're more-or-less parallel.
-            let crosses = if end_offset >= eps {
-                Crosses::Now
-            } else {
-                Crosses::Never
-            };
-            #[allow(clippy::if_same_then_else)]
-            let interact = if end_offset < eps && end_offset >= start_offset + eps {
-                // TODO: the condition above needs to be compatible with the bound in
-                // approx_intersection_y. We need to ensure that if we failed to find
-                // an intersection and the above condition holds, they really are
-                // disjoint after y.
-                Interaction::Blocks
-            } else if end_offset < -eps {
-                Interaction::Blocks
-            } else {
-                Interaction::Ignores
-            };
-            (crosses, interact)
-        }
-    }
-
-    pub fn compare_to_the_right(
-        &self,
-        other: &Segment,
-        y: Float,
-        eps: Float,
-    ) -> (Crosses, Interaction) {
-        self.reflect().compare_to_the_left(&other.reflect(), y, eps)
-    }
-
-    /// Reflect this segment horizontally.
-    pub fn reflect(&self) -> Segment {
-        Segment {
-            start: Point {
-                x: -self.start.x,
-                y: self.start.y,
-            },
-            end: Point {
-                x: -self.end.x,
-                y: self.end.y,
-            },
-        }
-    }
-
-    pub fn shift_horizontal(&self, delta: Float) -> Segment {
-        Segment {
-            start: Point {
-                x: self.start.x + delta,
-                y: self.start.y,
-            },
-            end: Point {
-                x: self.end.x + delta,
-                y: self.end.y,
-            },
-        }
-    }
-}
+pub use types::{Crosses, Interaction, Point, Segment, Vector};
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SegRef(usize);
@@ -277,19 +21,6 @@ pub struct SegRef(usize);
 pub struct SweepEvent {
     y: Float,
     payload: SweepEventPayload,
-}
-
-#[derive(Debug)]
-pub enum Crosses {
-    Now,
-    At { y: Float },
-    Never,
-}
-
-#[derive(Debug)]
-pub enum Interaction {
-    Blocks,
-    Ignores,
 }
 
 #[derive(Debug)]
@@ -841,10 +572,14 @@ pub struct SegmentArena {
     in_order: Vec<bool>,
     contour_next: Vec<SegRef>,
     contour_prev: Vec<SegRef>,
-    // TODO: include the winding numbers with the subdivision.
     // (maybe this should go elsewhere? everything else in SegmentArena is constructed
     // before sweeping the line...)
     subdivision: Vec<Vec<Point>>,
+    // This is a bit confusing right now. For each endpoint e, let f be the next endpoint
+    // in the subdivision list (i.e. the adjacent endpoint whose point is lexicographically
+    // larger than e). We take that segment and look at it in its original orientation. We
+    // take the winding number to the right of the oriented segment, and we store it in the
+    // index corresponding to e.
     winding: Vec<Vec<i32>>,
 }
 
@@ -896,6 +631,14 @@ impl SegmentArena {
 
     pub fn subdivisions(&self, s: SegRef) -> &[Point] {
         &self.subdivision[s.0]
+    }
+
+    pub fn subdivision_endpoint(&self, e: EndpointRef) -> Point {
+        self.subdivisions(e.seg)[e.subdivision_idx]
+    }
+
+    pub fn subdivision_winding(&self, e: EndpointRef) -> i32 {
+        self.windings(e.seg)[e.subdivision_idx]
     }
 
     pub fn windings(&self, s: SegRef) -> &[i32] {
@@ -973,6 +716,17 @@ impl SegmentArena {
     pub fn path_iter(&self, seg: SegRef) -> PathIter<'_> {
         PathIter::new(self, seg)
     }
+
+    /// This can only be called after creating all the subdivisions.
+    /// (TODO: better API)
+    pub fn walk_winding(&self, ordered: &[OrderedIntersection], winding: i32) -> Vec<Vec<Point>> {
+        let mut walker = Walker::new(self, ordered, winding);
+        let mut ret = Vec::new();
+        while let Some(contour) = walker.walk_next_contour() {
+            ret.push(contour);
+        }
+        ret
+    }
 }
 
 pub struct PathIter<'a> {
@@ -1034,10 +788,22 @@ pub struct Sweeper {
     pub queue: EventQueue,
     pub segments: SegmentArena,
     pub intersections: Vec<Intersection>,
+    pub ordered_intersections: Vec<OrderedIntersection>,
     pub eps: Float,
 }
 
 impl Sweeper {
+    pub fn new(eps: Float) -> Self {
+        Sweeper {
+            sweep_line: SweepLine::default(),
+            queue: EventQueue::default(),
+            segments: SegmentArena::default(),
+            intersections: Vec::new(),
+            ordered_intersections: Vec::new(),
+            eps,
+        }
+    }
+
     pub fn step(&mut self) {
         if let Some(event) = self.queue.pop() {
             let mut ctx = SweepContext {
@@ -1067,6 +833,7 @@ impl Sweeper {
                 &last_sweep,
                 &self.sweep_line,
             );
+            self.ordered_intersections.extend(ordered_intersections);
             //dbg!(&self.sweep_line, &self.queue, &intersections);
             self.sweep_line
                 .check_invariants(self.eps, &self.segments, &self.queue)
@@ -1260,10 +1027,37 @@ impl GroupedIntersection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub struct EndpointRef {
     pub seg: SegRef,
     pub subdivision_idx: usize,
+}
+
+impl EndpointRef {
+    pub fn pred(&self) -> Option<EndpointRef> {
+        self.subdivision_idx.checked_sub(1).map(|i| EndpointRef {
+            seg: self.seg,
+            subdivision_idx: i,
+        })
+    }
+
+    // Without access to the segment arena, there's no way to tell if
+    // the next endpoint reference is valid.
+    pub fn next(&self) -> EndpointRef {
+        EndpointRef {
+            seg: self.seg,
+            subdivision_idx: self.subdivision_idx + 1,
+        }
+    }
+
+    // Panics if this is the last endpoint on its segment.
+    pub fn next_on_path(&self, segments: &SegmentArena) -> EndpointRef {
+        if segments.in_order(self.seg) {
+            self.next()
+        } else {
+            self.pred().unwrap()
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1288,6 +1082,12 @@ impl OrderedIntersection {
         // If this intersection points doesn't stick out anything below, its right winding number is the same as its left one.
         idx.map(|idx| self.winding[idx]).unwrap_or(0)
     }
+
+    // TODO: can build some structure to make this faster
+    pub fn counter_clockwise_from(&self, endpoint: EndpointRef) -> EndpointRef {
+        let idx = self.endpoints.iter().position(|e| e == &endpoint).unwrap();
+        self.endpoints[idx.checked_sub(1).unwrap_or(self.endpoints.len() - 1)]
+    }
 }
 
 fn mid_range(xs: impl Iterator<Item = Float>) -> Float {
@@ -1298,6 +1098,81 @@ fn mid_range(xs: impl Iterator<Item = Float>) -> Float {
     (min + max) / 2.0
 }
 
+pub struct Walker<'a> {
+    segments: &'a SegmentArena,
+    next_endpoint: HashMap<EndpointRef, EndpointRef>,
+    subdivisions: Vec<EndpointRef>,
+    visited: HashSet<EndpointRef>,
+}
+
+impl<'a> Walker<'a> {
+    pub fn new(segments: &'a SegmentArena, ints: &'a [OrderedIntersection], winding: i32) -> Self {
+        let mut next_endpoint = HashMap::new();
+
+        for int in ints {
+            for (&e0, &e1) in cyclic_pairs(&int.endpoints) {
+                // We consider the segment from the intersection center point to e1.
+                // To find that segment's winding number, we need to find the smaller (lexicographically)
+                // endpoint of the segment.
+                let e1_less = segments.subdivision_endpoint(e1) < int.p;
+                let seg_start = if e1_less { e1 } else { e1.pred().unwrap() };
+                if winding != segments.subdivision_winding(seg_start) {
+                    continue;
+                }
+                // We only add next_endpoint mappings for segments that are oriented into the intersection.
+                let oriented_in = e1_less == segments.in_order(e1.seg);
+                if !oriented_in {
+                    continue;
+                }
+
+                // the endpoint at p of the segment whose other endpoint is e0
+                let e0_at_p = if segments.subdivision_endpoint(e0) < int.p {
+                    e0.next()
+                } else {
+                    e0.pred().unwrap()
+                };
+                next_endpoint.insert(e1, e0_at_p);
+            }
+        }
+
+        Self {
+            segments,
+            subdivisions: next_endpoint.keys().copied().collect(),
+            next_endpoint,
+            visited: HashSet::new(),
+        }
+    }
+
+    fn starting_endpoint(&mut self) -> Option<EndpointRef> {
+        while let Some(e) = self.subdivisions.pop() {
+            if self.visited.insert(e) {
+                return Some(e);
+            }
+        }
+        None
+    }
+
+    pub fn walk_next_contour(&mut self) -> Option<Vec<Point>> {
+        let mut ret = Vec::new();
+        let mut e = self.starting_endpoint()?;
+        let start_point = self.segments.subdivision_endpoint(e);
+        let mut p = start_point;
+
+        loop {
+            ret.push(p);
+            e = *self.next_endpoint.get(&e).unwrap();
+            self.visited.insert(e);
+
+            p = self.segments.subdivision_endpoint(e);
+            if p == start_point {
+                break;
+            }
+        }
+
+        Some(ret)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1305,13 +1180,7 @@ mod tests {
     // TODO: test these small examples with perturbations
     #[test]
     fn small_example_basic() {
-        let mut sweeper = Sweeper {
-            sweep_line: SweepLine::default(),
-            queue: EventQueue::default(),
-            segments: SegmentArena::default(),
-            intersections: Vec::new(),
-            eps: 0.1.try_into().unwrap(),
-        };
+        let mut sweeper = Sweeper::new(0.1.try_into().unwrap());
 
         sweeper.add_closed_polyline(&[
             Point::new(0.0, 0.0),
@@ -1324,17 +1193,14 @@ mod tests {
 
         sweeper.run();
         dbg!(sweeper.segments.path_iter(SegRef(0)).collect::<Vec<_>>());
+        dbg!(sweeper
+            .segments
+            .walk_winding(&sweeper.ordered_intersections, 1));
     }
 
     #[test]
     fn small_example_with_vertical() {
-        let mut sweeper = Sweeper {
-            sweep_line: SweepLine::default(),
-            queue: EventQueue::default(),
-            segments: SegmentArena::default(),
-            intersections: Vec::new(),
-            eps: 0.1.try_into().unwrap(),
-        };
+        let mut sweeper = Sweeper::new(0.1.try_into().unwrap());
 
         sweeper.add_closed_polyline(&[
             Point::new(0.0, 0.0),
@@ -1351,13 +1217,7 @@ mod tests {
 
     #[test]
     fn small_example_with_horizontal() {
-        let mut sweeper = Sweeper {
-            sweep_line: SweepLine::default(),
-            queue: EventQueue::default(),
-            segments: SegmentArena::default(),
-            intersections: Vec::new(),
-            eps: 0.1.try_into().unwrap(),
-        };
+        let mut sweeper = Sweeper::new(0.1.try_into().unwrap());
 
         sweeper.add_closed_polyline(&[
             Point::new(0.0, 1.0),
@@ -1381,29 +1241,5 @@ mod tests {
             Point::new(0.0, 0.0),
             Point::new(2.0, 0.0)
         ));
-    }
-
-    #[test]
-    fn approx_intersection_y() {
-        let a = Segment {
-            start: Point::new(0.0, 0.0),
-            end: Point::new(0.0, 10.0),
-        };
-        let b = Segment {
-            start: Point::new(-5.0, 0.0),
-            end: Point::new(5.0, 10.0),
-        };
-        let c = Segment {
-            start: Point::new(-5.0, 2.0),
-            end: Point::new(5.0, 8.0),
-        };
-
-        let eps = Float::try_from(0.1).unwrap();
-        assert_eq!(a.approx_intersection_y(&b, eps).unwrap(), 5.0);
-        assert_eq!(b.approx_intersection_y(&a, eps).unwrap(), 5.0);
-        assert_eq!(a.approx_intersection_y(&c, eps).unwrap(), 5.0);
-        assert_eq!(c.approx_intersection_y(&a, eps).unwrap(), 5.0);
-        assert_eq!(b.approx_intersection_y(&c, eps).unwrap(), 5.0);
-        assert_eq!(c.approx_intersection_y(&b, eps).unwrap(), 5.0);
     }
 }
