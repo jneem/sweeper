@@ -279,7 +279,7 @@ impl SweepLine {
             let mid = (low + high) / 2;
             let mid_seg = arena.get(self.segments[mid]);
             match mid_seg.at_y(self.y).cmp(&x) {
-                Ordering::Less => low = mid,
+                Ordering::Less => low = mid + 1,
                 Ordering::Equal => return mid,
                 Ordering::Greater => high = mid,
             }
@@ -379,9 +379,12 @@ impl SweepLine {
                 let idx = self.search_x(start.x, ctx.segments);
                 self.segments.insert(idx, right);
                 self.segments.insert(idx, left);
+                dbg!(idx, &self.segments);
 
                 self.scan_left(ctx, idx, true);
+                dbg!(&self.segments);
                 self.scan_right(ctx, idx + 1, true);
+                dbg!(&self.segments);
             }
             SweepEventPayload::ExitEnter { exit, enter } => {
                 ctx.emit_intersection(self.y, exit, enter);
@@ -408,12 +411,17 @@ impl SweepLine {
                 }
             }
             SweepEventPayload::Intersection { left, right, .. } => {
-                ctx.emit_intersection(self.y, left, right);
                 let left_idx = self.find_seg_ref(left);
                 let right_idx = self.find_seg_ref(right);
 
                 // I don't expect this test to fail, but I'm not sure it's actually impossible.
                 if left_idx < right_idx {
+                    for j in left_idx..right_idx {
+                        ctx.emit_intersection(self.y, self.segments[j], right);
+                    }
+                    for j in (left_idx + 1)..right_idx {
+                        ctx.emit_intersection(self.y, left, self.segments[j]);
+                    }
                     self.segments.swap(left_idx, right_idx);
                     let (left_idx, right_idx) = (right_idx, left_idx);
                     self.scan_both(ctx, left_idx);
@@ -659,12 +667,13 @@ impl SegmentArena {
         // The winding number of the region to the right (and slightly above) the previous intersection.
         let mut prev_right_winding: Option<i32> = None;
         for (int, ordered) in intersections.iter().zip(ordered) {
+            dbg!(ordered);
             let left_winding = if let Some(prev_seg) =
-                sweep.segment_before_grouped_intersection(dbg!(int), self)
+                sweep.segment_before_grouped_intersection(int, self)
             {
                 let order_offset = if self.in_order(prev_seg) { 0 } else { -1 };
                 // We're computing winding numbers in order, so the previous one should have been computed.
-                self.windings(dbg!(prev_seg)).last().unwrap() + order_offset
+                dbg!(self.windings(dbg!(prev_seg)).last().unwrap() + order_offset)
             } else if let Some(prev_winding) = prev_right_winding {
                 // This intersection has nothing pointing up, so
                 // its winding number is the same as the right winding of the
@@ -672,7 +681,7 @@ impl SegmentArena {
                 // this intersection and the preceding one, because that segment
                 // would intersect with the horizontal segment leading left from
                 // this intersection.
-                prev_winding
+                dbg!(prev_winding)
             } else if let Some(prev_seg) = prev_sweep.segment_before_grouped_intersection(int, self)
             {
                 let order_offset = if self.in_order(prev_seg) { 0 } else { -1 };
@@ -682,10 +691,10 @@ impl SegmentArena {
                 // the previous segment in the previous sweep-line.
                 // It's the last subdivision of that segment, because if there were
                 // a newer subdivision, we would have had a prior intersection.
-                self.windings(prev_seg).last().unwrap() + order_offset
+                dbg!(self.windings(prev_seg).last().unwrap() + order_offset)
             } else {
                 // We must be left-most.
-                0
+                dbg!(0)
             };
 
             for (e, local) in ordered.endpoints.iter().zip(&ordered.winding) {
@@ -817,7 +826,7 @@ impl Sweeper {
     }
 
     pub fn run(&mut self) {
-        //dbg!(&self);
+        dbg!(&self);
         while !self.queue.is_empty() {
             let last_sweep = self.sweep_line.clone();
             let intersections = self.run_one_y();
@@ -835,6 +844,7 @@ impl Sweeper {
             );
             self.ordered_intersections.extend(ordered_intersections);
             //dbg!(&self.sweep_line, &self.queue, &intersections);
+            dbg!(&self.sweep_line);
             self.sweep_line
                 .check_invariants(self.eps, &self.segments, &self.queue)
                 .unwrap();
@@ -1027,10 +1037,16 @@ impl GroupedIntersection {
     }
 }
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Hash, Eq, PartialEq)]
 pub struct EndpointRef {
     pub seg: SegRef,
     pub subdivision_idx: usize,
+}
+
+impl std::fmt::Debug for EndpointRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Seg({}.{})", self.seg.0, self.subdivision_idx)
+    }
 }
 
 impl EndpointRef {
@@ -1134,6 +1150,8 @@ impl<'a> Walker<'a> {
                 next_endpoint.insert(e1, e0_at_p);
             }
         }
+        dbg!(&next_endpoint);
+        dbg!(&ints);
 
         Self {
             segments,
@@ -1160,7 +1178,9 @@ impl<'a> Walker<'a> {
 
         loop {
             ret.push(p);
+            dbg!(e);
             e = *self.next_endpoint.get(&e).unwrap();
+            dbg!(e);
             self.visited.insert(e);
 
             p = self.segments.subdivision_endpoint(e);

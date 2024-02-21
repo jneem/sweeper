@@ -9,3 +9,9 @@ edition = "2021"
 malachite = "0.4.5"
 ordered-float = "4.2.0"
 robust = "1.1.0"
+
+[dev-dependencies]
+anyhow = "1.0.80"
+clap = { version = "4.5.1", features = ["derive"] }
+svg = { version = "0.15.1", default-features = false }
+usvg = { version = "0.40.0", default-features = false }
