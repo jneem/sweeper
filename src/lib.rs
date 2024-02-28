@@ -6,7 +6,7 @@ use std::{
 use malachite::Rational;
 use ordered_float::NotNan;
 
-type Float = NotNan<f64>;
+pub type Float = NotNan<f64>;
 
 pub mod equivalence;
 pub mod exact;
