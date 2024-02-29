@@ -1,30 +1,21 @@
-use arbitrary::Arbitrary;
-use sweeps::{Float, Point};
+use proptest::{
+    arbitrary::any,
+    prelude::prop,
+    prop_oneof, proptest,
+    strategy::{BoxedStrategy, Strategy},
+};
+use sweeps::{Float, Point, Sweeper};
 
-/// We'd like a type to denote "arbitrary float between -eps and eps", but since
-/// f64s can't be const generics, we instead take "arbitrary float between -1/D and 1/D."
 #[derive(Clone, Copy, Debug)]
-struct BoundedFloat<const D: u64>(f64);
-
-impl<'a, const D: u64> Arbitrary<'a> for BoundedFloat<D> {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let numerator: i64 = Arbitrary::arbitrary(u)?;
-        let x = (numerator as f64) / i64::MAX as f64;
-        Ok(BoundedFloat(x / D as f64))
-    }
-}
-
-#[derive(Arbitrary, Clone, Copy, Debug)]
-enum FloatPerturbation<const D: u64> {
+enum FloatPerturbation {
     /// Perturb by between -128 and 127 ulps.
     Ulp(i8),
     /// Perturb by a bounded additive amount.
-    Eps(BoundedFloat<D>),
+    Eps(f64),
 }
 
-impl<const D: u64> FloatPerturbation<D> {
+impl FloatPerturbation {
     fn apply(&self, f: Float) -> Float {
-        dbg!(self, f);
         match self {
             FloatPerturbation::Ulp(n) => {
                 let same_sign = (*n > 0) == (f.into_inner() > 0.0);
@@ -66,18 +57,18 @@ impl<const D: u64> FloatPerturbation<D> {
                     }
                 }
             }
-            FloatPerturbation::Eps(x) => f + x.0,
+            FloatPerturbation::Eps(x) => f + x,
         }
     }
 }
 
-#[derive(Arbitrary, Clone, Copy, Debug)]
-struct PointPerturbation<const D: u64> {
-    x: FloatPerturbation<D>,
-    y: FloatPerturbation<D>,
+#[derive(Clone, Copy, Debug)]
+struct PointPerturbation {
+    x: FloatPerturbation,
+    y: FloatPerturbation,
 }
 
-impl<const D: u64> PointPerturbation<D> {
+impl PointPerturbation {
     fn apply(&self, p: Point) -> Point {
         Point {
             x: self.x.apply(p.x),
@@ -86,34 +77,67 @@ impl<const D: u64> PointPerturbation<D> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Frac(f64);
-
-impl<'a> Arbitrary<'a> for Frac {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        Ok(Frac(u64::arbitrary(u)? as f64 / u64::MAX as f64))
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug)]
-enum Perturbation<const D: u64> {
+#[derive(Clone, Debug)]
+enum Perturbation {
     None {
         idx: usize,
     },
     Point {
-        perturbation: PointPerturbation<D>,
+        perturbation: PointPerturbation,
         idx: usize,
-        next: Box<Perturbation<D>>,
+        next: Box<Perturbation>,
     },
     Subdivision {
-        t: Frac,
+        // Between 0.0 and 1.0
+        t: f64,
         idx: usize,
-        next: Box<Perturbation<D>>,
+        next: Box<Perturbation>,
     },
     Superimposition {
-        left: Box<Perturbation<D>>,
-        right: Box<Perturbation<D>>,
+        left: Box<Perturbation>,
+        right: Box<Perturbation>,
     },
+}
+
+fn float_perturbation(eps: f64) -> impl Strategy<Value = FloatPerturbation> {
+    prop_oneof![
+        any::<i8>().prop_map(FloatPerturbation::Ulp),
+        (-eps..=eps).prop_map(FloatPerturbation::Eps)
+    ]
+}
+
+fn point_perturbation(eps: f64) -> impl Strategy<Value = PointPerturbation> {
+    (float_perturbation(eps), float_perturbation(eps)).prop_map(|(x, y)| PointPerturbation { x, y })
+}
+
+fn perturbation(eps: f64) -> impl Strategy<Value = Perturbation> {
+    let leaf = any::<usize>().prop_map(|idx| Perturbation::None { idx });
+    leaf.prop_recursive(3, 16, 8, move |inner| {
+        prop_oneof![
+            (point_perturbation(eps), any::<usize>(), inner.clone()).prop_map(
+                |(perturbation, idx, next)| {
+                    Perturbation::Point {
+                        perturbation,
+                        idx,
+                        next: Box::new(next),
+                    }
+                }
+            ),
+            (0.0..1.0, any::<usize>(), inner.clone()).prop_map(|(t, idx, next)| {
+                Perturbation::Subdivision {
+                    t,
+                    idx,
+                    next: Box::new(next),
+                }
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                Perturbation::Superimposition {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }
+            })
+        ]
+    })
 }
 
 fn index<T>(arr: &[T], idx: usize) -> &T {
@@ -124,10 +148,7 @@ fn index_mut<T>(arr: &mut [T], idx: usize) -> &mut T {
     &mut arr[idx % arr.len()]
 }
 
-fn realize_perturbation<const D: u64>(
-    base_cases: &[Vec<Point>],
-    pert: &Perturbation<D>,
-) -> Vec<Point> {
+fn realize_perturbation(base_cases: &[Vec<Point>], pert: &Perturbation) -> Vec<Point> {
     match pert {
         Perturbation::None { idx } => index(base_cases, *idx).to_owned(),
         Perturbation::Point {
@@ -145,7 +166,7 @@ fn realize_perturbation<const D: u64>(
             let idx = *idx % next.len();
             let p0 = *index(&next, idx);
             let p1 = *index(&next, idx + 1);
-            next.insert(idx + 1, p0.affine(p1, Float::new(t.0).unwrap()));
+            next.insert(idx + 1, p0.affine(p1, Float::new(*t).unwrap()));
             next
         }
         Perturbation::Superimposition { left, right } => {
@@ -157,21 +178,75 @@ fn realize_perturbation<const D: u64>(
 }
 
 #[test]
-fn test_main() {
+fn failing() {
+    use FloatPerturbation::*;
+    use Perturbation::*;
+
+    let perturbations = [
+        Superimposition {
+            left: Box::new(None {
+                idx: 1139994071224000373,
+            }),
+            right: Box::new(None {
+                idx: 12267259062547193913,
+            }),
+        },
+        Point {
+            perturbation: PointPerturbation {
+                x: Ulp(36),
+                y: Eps(-0.04613330792762832),
+            },
+            idx: 2956161633297032303,
+            next: Box::new(None {
+                idx: 2337348650272098524,
+            }),
+        },
+        Superimposition {
+            left: Box::new(None {
+                idx: 17250487650690405286,
+            }),
+            right: Box::new(None {
+                idx: 923426021708679644,
+            }),
+        },
+    ];
+
     let base = vec![vec![
-        Point::new(0.0, 0.0),
-        Point::new(1.0, 1.0),
-        Point::new(1.0, -1.0),
-        Point::new(2.0, 0.0),
-        Point::new(1.0, 1.0),
-        Point::new(1.0, -1.0),
+        sweeps::Point::new(0.0, 0.0),
+        sweeps::Point::new(1.0, 1.0),
+        sweeps::Point::new(1.0, -1.0),
+        sweeps::Point::new(2.0, 0.0),
+        sweeps::Point::new(1.0, 1.0),
+        sweeps::Point::new(1.0, -1.0),
     ]];
 
-    arbtest::arbtest(|u| {
-        let perturbation = Perturbation::<1>::arbitrary(u)?;
-        let after = realize_perturbation(&base, &perturbation);
-        dbg!(after);
+    let after = perturbations.iter().map(|p| realize_perturbation(&base, p));
 
-        Ok(())
-    });
+    let mut sweeper = Sweeper::new(0.01.try_into().unwrap());
+    for polyline in after {
+        sweeper.add_closed_polyline(&polyline);
+    }
+    sweeper.run();
+}
+
+proptest! {
+    #[test]
+    fn test_main(perturbations in prop::collection::vec(perturbation(0.1), 1..5)) {
+        let base = vec![vec![
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(1.0, -1.0),
+            Point::new(2.0, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(1.0, -1.0),
+        ]];
+
+        let after = perturbations.iter().map(|p| realize_perturbation(&base, p));
+
+        let mut sweeper = Sweeper::new(0.01.try_into().unwrap());
+        for polyline in after {
+            sweeper.add_closed_polyline(&polyline);
+        }
+        sweeper.run();
+    }
 }

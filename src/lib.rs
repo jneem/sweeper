@@ -437,6 +437,9 @@ impl SweepLine {
     // FIXME: this approach of using equivalence classes of intersections is ok topologically
     // but not geometrically: it might end up moving segments more than epsilon horizontally.
     // In order to fix this, I think we might need to allow extra horizontal pieces.
+    // FIXME: even topologically, this isn't correct. There may have been an enter-enter event
+    // that inserted two segments between segments that are marked as intersecting, but we didn't
+    // notice that they intersect.
     pub fn realize_intersections(
         &self,
         intersections: &[Intersection],
