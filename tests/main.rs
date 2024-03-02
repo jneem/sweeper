@@ -183,14 +183,25 @@ fn failing() {
     use Perturbation::*;
 
     let perturbations = [
-        None { idx: 0 },
         Point {
             perturbation: PointPerturbation {
-                x: Ulp(13),
+                x: Ulp(0),
+                y: Eps(-0.06779284945225439),
+            },
+            idx: 4320087526935266964,
+            next: Box::new(None { idx: 0 }),
+        },
+        Point {
+            perturbation: PointPerturbation {
+                x: Eps(0.0418994386470236),
                 y: Ulp(0),
             },
-            idx: 13854466487457408373,
-            next: Box::new(None { idx: 0 }),
+            idx: 6481034249709814033,
+            next: Box::new(Subdivision {
+                t: 0.5701120558356102,
+                idx: 16902377770183959372,
+                next: Box::new(None { idx: 0 }),
+            }),
         },
     ];
 

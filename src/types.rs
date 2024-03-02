@@ -173,7 +173,7 @@ impl Segment {
         // This probably isn't the right test. The guarantee we want is: at the y coordinate
         // of intersection, guarantee that the x coordinates are at most eps/2 apart.
         // Probably the real bound will need some assumption on the magnitudes of all the coordinates?
-        if det.abs() > eps.sqrt() {
+        if det.abs() > eps.into_inner() {
             let s = w.cross(v) / det;
             let t = w.cross(u) / det;
             if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {

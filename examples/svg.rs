@@ -30,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     for p in &polylines {
         sweeper.add_closed_polyline(p);
     }
+    /*
     sweeper.run();
     let out_polylines = sweeper
         .segments
@@ -37,6 +38,7 @@ fn main() -> anyhow::Result<()> {
     let out = polyline_svg(&out_polylines, args.epsilon);
     let out_file = File::create(args.output)?;
     svg::write(out_file, &out)?;
+    */
 
     Ok(())
 }
