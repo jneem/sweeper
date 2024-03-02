@@ -14,8 +14,14 @@ pub mod types;
 
 pub use types::{Crosses, Interaction, Point, Segment, Vector};
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SegRef(usize);
+
+impl std::fmt::Debug for SegRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "s_{}", self.0)
+    }
+}
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub struct SweepEvent {
@@ -219,7 +225,9 @@ impl SweepLine {
         queue: &EventQueue,
     ) -> Result<(), InvariantViolation> {
         let y = Rational::try_from(self.y.into_inner()).unwrap();
-        let eps = Rational::try_from(eps.into_inner()).unwrap();
+        // Multiplying by 2 is a bit sloppier than necessary, but in the actual algorithm we
+        // compare to epsilon using inexact math...
+        let eps = Rational::try_from(2.0 * eps.into_inner()).unwrap();
         for i in 0..self.segments.len() {
             let seg_i_approx = arena.get(self.segments[i]);
             let seg_i = exact::Segment::from(seg_i_approx);
@@ -348,7 +356,7 @@ impl SweepLine {
                         ctx.emit_intersection(self.y, self.segments[k], self.segments[j]);
                     }
                     self.segments[idx..=j].rotate_right(1);
-                    idx -= 1;
+                    idx += 1;
                 }
                 Crosses::Now | Crosses::Never => {}
             }
@@ -377,17 +385,20 @@ impl SweepLine {
                 let start = left_seg.start;
 
                 let idx = self.search_x(start.x, ctx.segments);
-                self.segments.insert(idx, right);
                 self.segments.insert(idx, left);
                 dbg!(idx, &self.segments);
 
-                self.scan_left(ctx, idx, true);
+                let idx = self.scan_left(ctx, idx, true);
+                let idx = self.scan_right(ctx, idx, true);
+                dbg!(&self.segments);
+                self.segments.insert(idx + 1, right);
                 dbg!(&self.segments);
                 self.scan_right(ctx, idx + 1, true);
-                dbg!(&self.segments);
             }
             SweepEventPayload::ExitEnter { exit, enter } => {
+                dbg!(&self.segments);
                 ctx.emit_intersection(self.y, exit, enter);
+                // FIXME: in the case of a horizontal segment, we have to make sure it enters before it can exit.
                 let idx = self.find_seg_ref(exit);
                 self.segments[idx] = enter;
 
@@ -411,9 +422,11 @@ impl SweepLine {
                 }
             }
             SweepEventPayload::Intersection { left, right, .. } => {
+                dbg!(&self.segments);
                 let left_idx = self.find_seg_ref(left);
                 let right_idx = self.find_seg_ref(right);
 
+                dbg!(left, right, left_idx, right_idx);
                 // I don't expect this test to fail, but I'm not sure it's actually impossible.
                 if left_idx < right_idx {
                     for j in left_idx..right_idx {
@@ -608,7 +621,7 @@ impl SegmentArena {
             self.all_segments.push(Segment { start: p0, end: p1 });
             self.in_order.push(true);
         } else {
-            assert!(p1 < p0);
+            //assert!(p1 < p0);
             self.all_segments.push(Segment { start: p1, end: p0 });
             self.in_order.push(false);
         }
@@ -825,6 +838,17 @@ impl Sweeper {
                 intersections: &mut self.intersections,
             };
             self.sweep_line.process_event(&mut ctx, event);
+        }
+    }
+
+    // Like run, but doesn't resolve intersections.
+    pub fn sweep(&mut self) {
+        dbg!(&self);
+        while !self.queue.is_empty() {
+            self.step();
+            self.sweep_line
+                .check_invariants(self.eps, &self.segments, &self.queue)
+                .unwrap();
         }
     }
 

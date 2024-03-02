@@ -183,31 +183,14 @@ fn failing() {
     use Perturbation::*;
 
     let perturbations = [
-        Superimposition {
-            left: Box::new(None {
-                idx: 1139994071224000373,
-            }),
-            right: Box::new(None {
-                idx: 12267259062547193913,
-            }),
-        },
+        None { idx: 0 },
         Point {
             perturbation: PointPerturbation {
-                x: Ulp(36),
-                y: Eps(-0.04613330792762832),
+                x: Ulp(13),
+                y: Ulp(0),
             },
-            idx: 2956161633297032303,
-            next: Box::new(None {
-                idx: 2337348650272098524,
-            }),
-        },
-        Superimposition {
-            left: Box::new(None {
-                idx: 17250487650690405286,
-            }),
-            right: Box::new(None {
-                idx: 923426021708679644,
-            }),
+            idx: 13854466487457408373,
+            next: Box::new(None { idx: 0 }),
         },
     ];
 
@@ -226,7 +209,7 @@ fn failing() {
     for polyline in after {
         sweeper.add_closed_polyline(&polyline);
     }
-    sweeper.run();
+    sweeper.sweep();
 }
 
 proptest! {
@@ -247,6 +230,6 @@ proptest! {
         for polyline in after {
             sweeper.add_closed_polyline(&polyline);
         }
-        sweeper.run();
+        sweeper.sweep();
     }
 }
