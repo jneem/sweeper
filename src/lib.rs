@@ -1,6 +1,7 @@
+#![feature(float_next_up_down)]
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashSet},
 };
 
 use malachite::Rational;
@@ -10,6 +11,7 @@ pub type Float = NotNan<f64>;
 
 pub mod equivalence;
 pub mod exact;
+pub mod interval;
 pub mod types;
 
 pub use types::{Crosses, Interaction, Point, Segment, Vector};
@@ -226,7 +228,7 @@ impl SweepLine {
                             SweepEventPayload::Exit(s) => vec![s],
                         };
                         ev.y.into_inner() <= y_int
-                            && ev_segs.iter().any(|s| between_segs.contains(&s))
+                            && ev_segs.iter().any(|s| between_segs.contains(s))
                     };
                     if y_int > y && !queue.inner.iter().any(good_ev) {
                         return Err(InvariantViolation::MissingEvent {

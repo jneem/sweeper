@@ -1,6 +1,8 @@
 use ordered_float::NotNan;
 use std::cmp::Ordering;
 
+use crate::interval::{self, Bounds};
+
 type Float = NotNan<f64>;
 
 #[derive(Debug)]
@@ -126,6 +128,21 @@ impl Segment {
         }
     }
 
+    pub fn at_y_bound(&self, y: Float) -> Bounds {
+        assert!((self.start.y..=self.end.y).contains(&y));
+
+        let denom = Bounds::from(self.end.y) - Bounds::from(self.start.y);
+        if denom.lower == 0.0 {
+            Bounds::from_pair(self.start.x, self.end.x)
+        } else {
+            let t = (Bounds::from(y) - Bounds::from(self.start.y))
+                .clamp(0.0.try_into().unwrap(), f64::INFINITY.try_into().unwrap())
+                / denom;
+            let t = t.clamp(0.0.try_into().unwrap(), 1.0.try_into().unwrap());
+            crate::interval::convex(self.start.x, self.end.x, t)
+        }
+    }
+
     /// Returns the x difference between segments at the last y position that they share.
     /// Returns a positive value if `other` is to the right.
     ///
@@ -163,24 +180,22 @@ impl Segment {
     /// This function is allowed to have false negatives (i.e. fail to find an intersection if
     /// there is one but just barely). In this case the intersection will be caught by comparing
     /// x coordinates along the sweep line.
-    pub fn approx_intersection_y(&self, other: &Segment, eps: Float) -> Option<Float> {
-        let u = self.end - self.start;
-        let v = other.end - other.start;
-        let w = other.start - self.start;
+    // TODO: get rid of _eps and make it return Option<Bounds>
+    pub fn approx_intersection_y(&self, other: &Segment, _eps: Float) -> Option<Float> {
+        let y0 = self.start.y.max(other.start.y);
+        let y1 = self.end.y.min(other.end.y);
 
-        let det = u.cross(v);
+        assert!(y1 >= y0);
 
-        // This probably isn't the right test. The guarantee we want is: at the y coordinate
-        // of intersection, guarantee that the x coordinates are at most eps/2 apart.
-        // Probably the real bound will need some assumption on the magnitudes of all the coordinates?
-        if det.abs() > eps.into_inner() {
-            let s = w.cross(v) / det;
-            let t = w.cross(u) / det;
-            if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
-                return Some(self.start.y + s * (self.end.y - self.start.y).into_inner());
-            }
+        let dy0 = other.at_y_bound(y0) - self.at_y_bound(y0);
+        let dy1 = other.at_y_bound(y1) - self.at_y_bound(y1);
+
+        let t = dy0 / (dy0 - dy1);
+        if t.ge(0.0) && t.le(1.0) {
+            Some(interval::convex(y0, y1, t).lower)
+        } else {
+            None
         }
-        None
     }
 
     pub fn is_exactly_horizontal(&self) -> bool {
@@ -295,11 +310,15 @@ mod tests {
         };
 
         let eps = Float::try_from(0.1).unwrap();
-        assert_eq!(a.approx_intersection_y(&b, eps).unwrap(), 5.0);
-        assert_eq!(b.approx_intersection_y(&a, eps).unwrap(), 5.0);
-        assert_eq!(a.approx_intersection_y(&c, eps).unwrap(), 5.0);
-        assert_eq!(c.approx_intersection_y(&a, eps).unwrap(), 5.0);
-        assert_eq!(b.approx_intersection_y(&c, eps).unwrap(), 5.0);
-        assert_eq!(c.approx_intersection_y(&b, eps).unwrap(), 5.0);
+
+        fn close_lower_bound(x: Float, y: f64) {
+            assert!(x.into_inner() <= y && x.into_inner() >= y - 1e-8);
+        }
+        close_lower_bound(a.approx_intersection_y(&b, eps).unwrap(), 5.0);
+        close_lower_bound(b.approx_intersection_y(&a, eps).unwrap(), 5.0);
+        close_lower_bound(a.approx_intersection_y(&c, eps).unwrap(), 5.0);
+        close_lower_bound(c.approx_intersection_y(&a, eps).unwrap(), 5.0);
+        close_lower_bound(b.approx_intersection_y(&c, eps).unwrap(), 5.0);
+        close_lower_bound(c.approx_intersection_y(&b, eps).unwrap(), 5.0);
     }
 }
