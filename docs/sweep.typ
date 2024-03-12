@@ -10,27 +10,11 @@ with larger $y$ (we'll assume for now that there are no horizontal segments). We
 line segment as a function of $y$. So if $alpha: [y_0 (alpha), y_1 (alpha)] arrow bb(R)$ is a line segment
 then $alpha(y)$ is the $x$ coordinate at $y$-coordinate $y in [y_0 (alpha), y_1 (alpha)]$
 
-We'll only deal with closed paths for now, so there are three kinds of points that can be hit by the sweep
-line: points that have a locally minimal $y$ coordinate on their path, points that have a locally maximal $y$
-coordinate on their path, and points that have neither. A picture would be nice here...
-
 Define a relation $lt.curly_(y,epsilon)$ on line segments whose domain contains $y$, where
 $alpha lt.curly_(y,epsilon) beta$ if $alpha(y) + epsilon < beta(y)$.
 Despite our choice of symbol, this is not necessarily transitive.
 
-== The insertion philosophy
-
-We're starting with continuous closed paths, and we want to finish with
-continuous closed paths. We'll achieve this by keeping track of the paths as
-we sweep the line (as opposed to the classical Bentley-Ottmann algorithm, which
-just treats all line segments individually). The algorithm is designed to be
-careful about the topology. This is a little tricky because for a sweep line
-it can be numerically hard to check how the segments are ordered. So we don't
-claim to find all the intersection points between all the segments, but we do
-try to ensure some "large-scale" correctness of the intersections: if you
-consider two sweep-lines and two continuous paths going between them that are
-sufficiently far from one another at the sweep-lines, then the number of intersections
-we find between those paths will have the correct parity.
+== Partially ordered sweep-lines
 
 At our first pass, we won't try to detect intersections at all. Instead, we'll produce
 a continuum of sweep-lines (constant except at a finite number of points) that *approximately*
@@ -59,41 +43,60 @@ approximate ordering is exact.
 
 One consequence of our approximate approach is that we need to do a little extra bookkeeping to maintain
 the continuity of the input paths: when one segment exits and its path-neighbor enters, we need to remember
-that they are connected because the approximate sweep-line might not keep them together.
-For this reason, the current implementation of the algorithm tracks "enter" and "exit" events
-in pairs.
+that they are connected because the approximate sweep-line might not keep them together. We'll ignore this
+bookkeeping for now, and we'll also gloss over the fact that a real implementation would do everything in
+one pass. (The goal here is to get into detail about the sweep-line invariants, and prove that we can maintain them.)
 
 == The sweep-line invariants
 
-We will maintain a sorted-ish "sweep-line" data structure $(alpha^1, ..., alpha^m)$, which at height $y$ has the following invariants:
-+ all line segments' domain contains $y$
-+ if $alpha^i lt.curly_(y,epsilon) alpha^j$ then $i < j$
-+ for every $i < j$, if $alpha^i$ and $alpha^j$ $epsilon$-cross after $y$,
+We're going to have a sweep-line that depends on $y$. When we need to emphasize this, we'll use the
+cumbersome but explicit notation
+$(alpha_y^1, ..., alpha_y^(m_y))$.
+
+#def[
+Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$.
+We say that $alpha^j$ $epsilon$-crosses $alpha^i$ by $y'$ if $j < i$ and $alpha^j gt.curly_(y',epsilon) alpha^i$
+or $i < j$ and $alpha^i gt.curly_(y',epsilon) alpha^j$.
+]
+
+In other words, an $epsilon$-crossing of two segments witnesses the $epsilon$-ordering invariant breaking.
+
+
+Our sweep-line will maintain two invariants:
++ At every $y$, the sweep-line is $epsilon$-ordered at $y$. (We'll call this the "order" invariant.)
++ For every $y$, every $y' > y$, and every $1 <= i < j <= m_y$, if $alpha_y^i$ and $alpha_y^j$ $epsilon$-cross by $y'$,
   then the event queue contains an event for some $j' in (i, j)$,
-  and at least one of these events occurs
-  at a $y$ coordinate where nothing has yet $epsilon$-crossed $alpha^i$.
+  and at least one of these events occurs before $y'$.
+  (We'll call this the "crossing" invariant.)
 
-(We say that $alpha^j$ $epsilon$-crosses $alpha^i$ at $y'$ if $j < i$ and $alpha^j gt.curly_(y',epsilon) alpha^i$
-or $i < j$ and $alpha^i gt.curly_(y',epsilon) alpha^j$.)
-
-The first two invariants are just a rephrasing of the requirement that our sweep-line be $epsilon$-ordered.
-Our last invariant is essentially a robust variant of the Bentley-Ottmann rule. In the exact Bentley-Ottmann algorithm,
-you only need to compare a segment to the ones below and above it in the sweep-line; the structure of the algorithm
-ensures that if your segment intersects something else then you'll have a chance to process that intersection while
-handling some future sweep-line event. Our last invariant says exactly this: whenever two segments robustly intersect,
-we'll have an event in the queue that will allow us to witness this.
+Hopefully the first invariant is already well-motivated, so let's discuss the second.
+To naively ensure that we find
+all intersections, we could adopt a stronger crossing invariant that requires all pairs of intersecting segments
+in the sweep-line to immediately put an intersection event in the queue. This would be inefficient to maintain because
+it would require testing all pairs of segments. The main Bentley-Ottmann observation is that it's enough to have intersection
+events for all sweep-line-adjacent pairs, because any pair of lines will have to become sweep-line adjacent strictly
+before they intersect. We can't rely only on sweep-line adjacency because of the $epsilon$ fudge, but our "crossing"
+event essentially encodes the same property. Note that if $j = i+1$ and $y$ is just before the $epsilon$-crossing height and
+there are no other segments nearby, then the mysterious $j'$ must be either $i$ or $j$ (because there is nothing in between)
+and the mysterious queue event must be the crossing of $i$ and $j$ (it couldn't be an exit event, because we assumed they
+cross and they must cross before they exit). In other cases, the crossing event ensures that even if we haven't
+recorded the upcoming crossing of $alpha^i$ and $alpha^j$, something will happen in between them that will give us
+a chance to test their crossing.
 
 == Sweeping the sweep line
 
-The first observation is that the sweep line invariants are maintained as we increase $y$ up
+The first observation is that the sweep line invariants are maintained as we increase $y$ continuously up
 to the next event:
-+ There is an event whenever $y$ leaves the domain of a segment, so $y$ remains in all domains until the next event.
-+ In order for this invariant to fail, two line segments must $epsilon$-cross one another. The third invariant
-  guarantees that there's an event before this happens.
++ For the order invariant, first note that there is an event whenever $y$ leaves the domain of a segment, so $y$ remains in all domains until the next event.
+  Moreover, if at any $y' > y$ the ordering breaks, two line segments must have $epsilon$-crossed one another by $y'$.
+  The third invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
+  constraint is maintained.
 + This invariant is maintained because the set of things to check (i.e. the set of line segments that cross $epsilon$-cross
   one another after $y$) only shrinks as $y$ increases.
 
 == An "exit-enter" event
+
+== TODO: there are no more "exit-enter" etc events. Rewrite from here
 
 An "exit-enter" event is the kind of event that happens when we encounter the end of a line segment
 and the beginning of the next, and the vertex where it happens doesn't have a locally extremal $y$ coordinate.
