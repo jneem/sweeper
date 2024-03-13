@@ -217,13 +217,12 @@ impl Segment {
         let start_offset = other.at_y(y) - self.at_y(y);
         let end_offset = self.end_offset(other);
 
-        // TODO: explain why we shift the other guy
-        let y_int = self.approx_intersection_y(&other.shift_horizontal(eps / 2.0), eps);
+        let y_int = self.approx_intersection_y(other, eps);
         let y_int = y_int
             .filter(|z| z >= &y && !self.is_exactly_horizontal() && !other.is_exactly_horizontal());
 
         if let Some(y) = y_int {
-            // Because of the shift, maybe there wasn't really an intersection. Or maybe
+            // Maybe there wasn't really an intersection. Or maybe
             // the intersection was in the wrong direction.
             if end_offset.into_inner() > 0.0 {
                 (Crosses::At { y }, Interaction::Blocks)

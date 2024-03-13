@@ -1,8 +1,10 @@
-#import "@preview/ctheorems:1.1.0": *
+#import "@preview/ctheorems:1.1.2": *
+#set par(justify: true)
 
 #show: thmrules
 #let lemma = thmbox("lemma", "Lemma")
 #let def = thmbox("definition", "Definition")
+#let proof = thmproof("proof", "Proof")
 
 We'll be talking about sweep line algorithms, where the sweep line is horizontal and increasing in $y$.
 Therefore, every line segment "starts" at the coordinate with smaller $y$ and "ends" at the coordinate
@@ -13,6 +15,13 @@ then $alpha(y)$ is the $x$ coordinate at $y$-coordinate $y in [y_0 (alpha), y_1 
 Define a relation $lt.curly_(y,epsilon)$ on line segments whose domain contains $y$, where
 $alpha lt.curly_(y,epsilon) beta$ if $alpha(y) + epsilon < beta(y)$.
 Despite our choice of symbol, this is not necessarily transitive.
+
+#def[
+  Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$alpha$ and $beta$
+  are $epsilon$-close from $y$ onwards* if
+  $ |alpha(z) - beta(z)| <= epsilon $
+  for all $y <= z <= min(y_1(alpha), y_1(beta))$.
+] <close_from_y_onwards>
 
 == Partially ordered sweep-lines
 
@@ -94,72 +103,76 @@ to the next event:
 + This invariant is maintained because the set of things to check (i.e. the set of line segments that cross $epsilon$-cross
   one another after $y$) only shrinks as $y$ increases.
 
-== An "exit-enter" event
+== Interaction with adjacent segments
 
-== TODO: there are no more "exit-enter" etc events. Rewrite from here
+In vanilla Bentley-Ottmann, each segment gets compared to its two sweep-line neighbors; they can either intersect or not intersect.
+When numerical errors are taken into account, we may need to compare to
+more segments. Also there are more possible results from the comparison.
 
-An "exit-enter" event is the kind of event that happens when we encounter the end of a line segment
-and the beginning of the next, and the vertex where it happens doesn't have a locally extremal $y$ coordinate.
-When we encounter such an event, we remove the finished segment from the sweep-line and insert
-the next one. We try to insert the new segment at the same position as the old one; let's call this position
-$i$ and so the new segment is $alpha^i$. Let's call the removed segment $alpha^i_"old"$.
+First of all, there are two kinds of intersections: a "normal" intersection where we can compute the
+`y` coordinate of the crossing and insert an intersection event into the queue; and another kind of intersection
+where the two lines definitely intersect somewhere, but they're too close to coincident to really figure out when.
+We call the first case a "clear" intersection and the second case a "shuffle" intersection.
+Rather than defining exactly the distinction between the two cases, let's list some properties that we
+would like to hold.
 
-First, note that the first sweep-line invariant is trivially satisfied. The
-second sweep-line invariant is satisfied because it was satisfied before
-removing $alpha^i_"old"$ and $alpha^i(y) = alpha^i_"old" (y)$. But the third
-sweep-line invariant might be broken and so we need to fix it. There are up
-to two things we'll do to fix the invariant: we might "move" the starting $x$
-coordinate of $alpha^i$ by inserting a small horizontal segment (and recording
-its intersections with whatever segments it crosses). And we might insert an
-intersection event into the event queue.
+Fix $y$ and suppose we have two segments $alpha^1$ and $alpha^2$ satisfying $alpha^1 lt.curly_(y,epsilon) alpha^2$.
+- If the segments $epsilon$-cross then they have a clear intersection or a shuffle intersection (or both).
+- If they have a shuffle intersection then the two segments are $epsilon$-close from $y$ onwards
+  (@close_from_y_onwards).
+- If the segments clearly intersect, there is an algorithm that computes a lower bound $hat(y)$ on the exact intersection height,
+  with the property that $alpha^1(hat(y)) >= alpha^2(hat(y)) - epsilon$.
 
-First, we compare $alpha^i$ to $alpha^j$ for $j < i$. 
-We'll start at $j = i-1$ and keep going down
-until we decide to stop. Whenever we encounter $alpha^j$ that $epsilon/2$ crosses $alpha^i$
-(which, recalling that $j < i$ means that $alpha^j$ eventually goes $epsilon/2$ above $alpha^i$),
-we check whether the crossing is $epsilon/2$-robust. If it isn't,
-we move $alpha^i$ below $alpha^j$ in the sweep line and record the
-fact that $alpha^j$ intersected all the $alpha^k$ for $j <= k < i - 1$. If the crossing is $epsilon/2$-robust,
-we find the $y$-coordinate of the
-intersection and insert an intersection event; then we stop scanning $j$ downwards.
-Finally, we stop scanning $j$ downwards if we encounter some $alpha^j$ that starts below $alpha^i (y) - epsilon$.
-Note that the new segment (which used to be called $alpha^i$) is not necessarily at index $i$ anymore. Instead
-it is at some index $i_0 <= i$.
+The second property implies that if there's a shuffle intersection $alpha^1$ and $alpha^2$ can be in either order
+in the sweep-line (for all sweep-lines at or after $y$).
 
-Before moving onto the upward scan, note that in moving the new segment from index $i$ to index $i_0$ we haven't broken the second sweep-line invariant:
-we only moved the new segment below $alpha^j$ if there was an $epsilon/2$-crossing (meaning $alpha^j$ ended up $epsilon/2$ above)
-that wasn't $epsilon/2$-robust (implying that $alpha^j$ started above the new segment). Since $k > j$ implies that
-$alpha^k (y) > alpha^j (y) - epsilon >= alpha^i (y) - epsilon$, all of the $alpha^k$ that got moved above $alpha^i$ were allowed there.
+The third property imposes a requirement on the allowable slopes for $alpha^1$ and $alpha^2$. With finite precision
+and almost-horizontal lines, such a $hat(y)$ might not exist. The current implementation has some special logic
+for exactly horizontal lines (which is not yet written up here), and deals with almost-horizontal lines by perturbing
+them to be exactly horizontal. The reason we insist on a lower bound will become clear later.
 
-When scanning $j$ upwards, we start with $j = i + 1$ (i.e. the index above the place where we originally inserted
-the new segment), and we'll compare the segments $alpha^j$ with the new segment $alpha^(i_0)$.
-Again, we look for $epsilon/2$-crossings. If they are not $epsilon/2$-robust, we move $alpha^(i+1)...alpha^j$ below $alpha^(i_0)$ and
-record intersection events for all the intervening segments. If the crossing is $epsilon/2$-robust, we insert an intersection event and stop.
-Again, we also stop scanning if we encounter some $alpha^j$ that starts above $alpha^(i_0) (y) + epsilon$.
+The other thing we need to check when comparing adjacent segments is whether we're allowed to "stop:" once we've
+compared $alpha^j$ to $alpha^(i)$, do we also need to compare it to $alpha^(i-1)$? If so, we say that $alpha^i$ "ignores"
+$alpha^j$; otherwise, we say that $alpha^i$ "blocks" $alpha^j$.
 
-The upwards scan preserved the second invariant for the same reason as the downwards scan; we just have to check whether the combination
-of the two scans inserted enough intersection events to make the third invariant hold. Details TBD, but the outline is
-that we only need to check whether the scan terminated too early. Say our downwards scan terminated at $j$ but there
-was some $j' < j$ that intersects the new segment. If we terminated because $j$ intersects the new segment, then $j'$ must intersect $j$
-before it intersects the new one, and so we can apply the third invariant for $j'$ and $j$ (because it held before we processed
-the new segment) to see that there is an intersection event between $j'$ and $j$ (and therefore between $j'$ and $i$).
-On the other hand, if we terminated because $j$ doesn't intersect the new segment then $j$ must have an end event before
-the intersection of $j'$ and $i$; this event witnesses the third invariant.
+== An "enter" event
 
-== An "enter-enter" event
+When inserting a new segment into the current sweep-line, we first choose its sweep-line position using
+a binary search on its horizontal coordinate. Let's write $(alpha^1, dots, alpha^m)$ for the sweep-line
+*after* inserting the new segment $alpha^i$.
 
-This adds two new segments, and we process it much like the "exit-enter" except that
-- we start by searching for a good insertion point (because it isn't topologically predetermined for us)
-- we decide in advance which of our two new segments is "above"
-- when scanning down we consider crossings only for the lower segment, and when scanning up we consider crossing only for the upper segment
-- we allow the two new segments to get "separated" in the sweep line (anything that gets put in between them will have an intersection recorded)
+#lemma[
+$(alpha^1, dots, alpha^m)$ are $epsilon$-ordered at $y$.
+]
 
-== An "exit-exit" event
+#proof[
+Binary search on unsorted lists is a bit funky, but it is still guaranteed to insert $alpha^i$ in a position
+where $alpha^(i-1) (y) <= alpha^i (y) <= alpha^(i+1) (y)$ (where the boundary cases are handling by declaring that
+"$alpha^0(y)$" means $-infinity$ and "$alpha^(m+1) (y)$" means $infinity$).
+So now consider any $j != i$. Since the sweep-line was $epsilon$-ordered before inserting $alpha^i$, if $j >= i + 1$ then
+$alpha^(i) (y) <= alpha^(i+1) (y) <= alpha^j (y) + epsilon$.
+On the other hand, if $j <= i - 1$ then $alpha^j (y) - epsilon <= alpha^(i-1) (y) <= alpha^i (y)$. This checks the ordering
+invariant when one of the indices being compared is the newly-inserted one. Clearly the ordering invariant
+is also maintained when both indices being compared are old.
+]
 
-On an exit-exit event
-- we mark intersections for all segments that were between the two removed segments on the sweep line
-- we test crossings for the segment that was right of the two removed segments
+Next we need to look for intersections; we'll look to the left first and then to the right.
+We start by comparing $alpha^i$ to $alpha^(i-1)$.
+If they clearly intersect, we add an intersection event to the queue. If they have a shuffle intersection,
+we change their order in the current sweep line. Then if $alpha^(i-1)$ blocks $alpha^i$, we stop comparing to the left;
+otherwise, we continue to look at $alpha^(i-2)$.
+(If we compare $alpha^j$ to $alpha^i$ and there is a shuffle intersection, we move $alpha^i$ to the left of $alpha^j$
+while preserving the order of any segments between them.) (TODO: consider rewriting this algorithm as a search for
+the position of the new segment, instead of as an insertion followed by an iterative modification)
 
-== An intersection event
+#lemma[
+For any sweep-line  $(alpha^1, dots, alpha^m)$ that is $epsilon$-ordered at $y$ and any $i < j < k$, if $alpha^i$ and $alpha^j$
+have a shuffle intersection then $alpha^j$ and $alpha^k$ do not have a shuffle intersection.
+]
 
-We record an intersection, swap the order of the intersecting segments in the sweep line, and then check them both for more crossings.
+#proof[
+TODO. We need to tweak the definition of shuffle intersections to ensure this. The point is that if we've shuffled to the
+left after the initial insertion, we need to make sure that we don't also try to shuffle to the right.
+I think it should be enough to insist that shuffle intersections only happen when the two segments are in the wrong (exact)
+order at height $y$.
+]
