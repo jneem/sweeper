@@ -23,6 +23,17 @@ Despite our choice of symbol, this is not necessarily transitive.
   for all $y <= z <= min(y_1(alpha), y_1(beta))$.
 ] <close_from_y_onwards>
 
+#def[
+  Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$(alpha, beta)$
+  $epsilon$-cross by $y$* if $y$ belongs to both domains and $alpha(y) > beta(y) + epsilon$.
+  We say that *$(alpha, beta)$ $epsilon$-cross* if they $epsilon$-cross by $min(y_1 (alpha), y_1 (beta))$.
+]
+
+Note that the definition of $epsilon$-crossing is not symmetric: $(alpha, beta)$ $epsilon$-crossing is
+not the same as $(beta, alpha)$ $epsilon$-crossing. We will usually talk about $(alpha, beta)$ $epsilon$-crossing
+in the context that $alpha lt.curly_(y,epsilon) beta$, and in this context "$(alpha, beta)$ $epsilon$-cross" means
+that at some height $y'$ before the end of $alpha$ and $beta$, the inequality $alpha lt.curly_(y',epsilon) beta$ will fail.
+
 == Partially ordered sweep-lines
 
 At our first pass, we won't try to detect intersections at all. Instead, we'll produce
@@ -62,21 +73,14 @@ We're going to have a sweep-line that depends on $y$. When we need to emphasize 
 cumbersome but explicit notation
 $(alpha_y^1, ..., alpha_y^(m_y))$.
 
-#def[
-Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$.
-We say that $alpha^j$ $epsilon$-crosses $alpha^i$ by $y'$ if $j < i$ and $alpha^j gt.curly_(y',epsilon) alpha^i$
-or $i < j$ and $alpha^i gt.curly_(y',epsilon) alpha^j$.
-]
-
-In other words, an $epsilon$-crossing of two segments witnesses the $epsilon$-ordering invariant breaking.
-
-
-Our sweep-line will maintain two invariants:
+Our sweep-line will maintain three invariants:
 + At every $y$, the sweep-line is $epsilon$-ordered at $y$. (We'll call this the "order" invariant.)
 + For every $y$, every $y' > y$, and every $1 <= i < j <= m_y$, if $alpha_y^i$ and $alpha_y^j$ $epsilon$-cross by $y'$,
   then the event queue contains an event for some $j' in (i, j)$,
   and at least one of these events occurs before $y'$.
   (We'll call this the "crossing" invariant.)
++ For every $y$ and every $1 <= i < j <= m_y$, $(alpha^i, alpha^j)$ do not have a shuffle intersection at $y$.
+  (We'll call this the "shuffling" invariant.)
 
 Hopefully the first invariant is already well-motivated, so let's discuss the second.
 To naively ensure that we find
@@ -91,6 +95,8 @@ and the mysterious queue event must be the crossing of $i$ and $j$ (it couldn't 
 cross and they must cross before they exit). In other cases, the crossing event ensures that even if we haven't
 recorded the upcoming crossing of $alpha^i$ and $alpha^j$, something will happen in between them that will give us
 a chance to test their crossing.
+
+I don't have a good self-contained motivation for the shuffling invariant yet, but it's hard to insert segments without it.
 
 == Sweeping the sweep line
 
@@ -118,8 +124,6 @@ would like to hold.
 
 Fix $y$ and suppose we have two segments $alpha^1$ and $alpha^2$ satisfying $alpha^1 lt.curly_(y,epsilon) alpha^2$.
 - If the segments $epsilon$-cross then they have a clear intersection or a shuffle intersection (or both).
-- If they have a shuffle intersection then the two segments are $epsilon$-close from $y$ onwards
-  (@close_from_y_onwards).
 - If the segments clearly intersect, there is an algorithm that computes a lower bound $hat(y)$ on the exact intersection height,
   with the property that $alpha^1(hat(y)) >= alpha^2(hat(y)) - epsilon$.
 
@@ -131,48 +135,94 @@ and almost-horizontal lines, such a $hat(y)$ might not exist. The current implem
 for exactly horizontal lines (which is not yet written up here), and deals with almost-horizontal lines by perturbing
 them to be exactly horizontal. The reason we insist on a lower bound will become clear later.
 
-The other thing we need to check when comparing adjacent segments is whether we're allowed to "stop:" once we've
-compared $alpha^j$ to $alpha^(i)$, do we also need to compare it to $alpha^(i-1)$? If so, we say that $alpha^i$ "ignores"
-$alpha^j$; otherwise, we say that $alpha^i$ "blocks" $alpha^j$.
+Now let's try to come up with definitions that satisfy our properties:
+#def[
+Suppose $alpha lt.curly_(y,epsilon) beta$.
+We say that *$(alpha, beta)$ have a shuffle intersection at $y$* if $beta(y) < alpha(y)$ and $(alpha, beta)$ $epsilon$-cross.
+We say that *$(alpha, beta)$ have a clear intersection at $y$* if $(alpha, beta)$ $epsilon$-cross but do not have a shuffle intersection at $y$.
+]
+
+Clearly these definitions satisfy the first desired property (if $(alpha, beta)$ $epsilon$-cross then there is some kind
+of intersection). To check that they satisfy the second property requires some more careful analysis (which will only
+work when $epsilon$ is sufficiently large depending on the precision of the floating point numbers we're using),
+but the point is that if $(alpha, beta)$ clearly cross then their "slopes" (not exactly their slopes, but close enough)
+are at least $epsilon$ apart and so we can compute intersections accurately enough. In practice, there will be some numerical
+errors in evaluating these definitions, but that's ok in some cases: if $beta(y)$ is just barely less than $alpha(y)$, we
+can allow a false negative in the shuffle intersection test, and the numerical stability for the clear intersection
+test will just be a little bit worse. On the other hand, we will insist that if the shuffle intersection test passes
+then $beta(y)$ is truly less than $alpha(y)$.
+
+#lemma[
+If $(alpha, beta)$ have a shuffle intersection at $y$ then $alpha(y') > beta(y')$ for all $y' in [y, min(y_1 (alpha), y_1 (beta))]$.
+]<lem-shuffle-ordered>
+
+#proof[
+The definition of shuffle intersections implies that the desired inequality holds at the endpoints of the interval. Convexity
+(or monotonicity of linear functions) does the rest.
+]
+
+#lemma[
+Suppose $(alpha, beta, gamma)$ is $epsilon$-ordered at $y$. If $(alpha, beta)$ have a shuffle intersection at $y$ and $(beta, gamma)$
+have a shuffle intersection at $y$ then $(alpha, gamma)$ have a shuffle intersection at $y$.
+]<lem-shuffle-transitive>
+
+#proof[
+Let $y_1 = min(y_1 (alpha), y_1 (beta), y_1(gamma))$.
+Since $alpha$ and $beta$ have a shuffle intersection at $y$, $alpha(y) > beta(y)$; since $beta$ and $gamma$ have a shuffle
+intersection at $y$, $beta(y) > gamma(y)$; therefore, $alpha(y) > gamma(y)$.
+Now, $y_1 = min(y_1(alpha), y_1(beta))$ or $y_1 = min(y_1(beta), y_1(gamma))$; in the first case
+$alpha(y_1) > beta(y_1) + epsilon$; in the second case $beta(y_1) > gamma(y_1) + epsilon$. In either case, @lem-shuffle-transitive
+implies that $alpha(y_1) > beta(y_1) > gamma(y_1)$. Putting these cases together, we have $alpha(y_1) > gamma(y_1) + epsilon$.
+
+Finally, we assumed that $(alpha, beta, gamma)$ is $epsilon$-ordered at $y$ and so $alpha(y) <= gamma(y) + epsilon$.
+It follows that $alpha - gamma$ is monotonic increasing, and so $(alpha, gamma)$ $epsilon$-cross. Therefore $(alpha, gamma)$
+have a shuffle intersection at $y$.
+]
 
 == An "enter" event
 
 When inserting a new segment into the current sweep-line, we first choose its sweep-line position using
 a binary search on its horizontal coordinate. Let's write $(alpha^1, dots, alpha^m)$ for the sweep-line
-*after* inserting the new segment $alpha^i$.
+before inserting the new segment, and let's call the new segment $beta$. First, we observe that
+there is a place to insert the new segment while preserving the ordering invariant.
 
 #lemma[
-$(alpha^1, dots, alpha^m)$ are $epsilon$-ordered at $y$.
-]
-
-#proof[
-Binary search on unsorted lists is a bit funky, but it is still guaranteed to insert $alpha^i$ in a position
-where $alpha^(i-1) (y) <= alpha^i (y) <= alpha^(i+1) (y)$ (where the boundary cases are handling by declaring that
+Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$.
+If $alpha^i (y) <= beta(y) <= alpha^(i+1) (y)$ then
+$(alpha^1, ..., alpha^i, beta, alpha^(i+1), ..., alpha^m)$ are $epsilon$-ordered at $y$.
+(Here, we can allow the corner cases $i = 0$ and $i = m$ by declaring that
 "$alpha^0(y)$" means $-infinity$ and "$alpha^(m+1) (y)$" means $infinity$).
-So now consider any $j != i$. Since the sweep-line was $epsilon$-ordered before inserting $alpha^i$, if $j >= i + 1$ then
-$alpha^(i) (y) <= alpha^(i+1) (y) <= alpha^j (y) + epsilon$.
-On the other hand, if $j <= i - 1$ then $alpha^j (y) - epsilon <= alpha^(i-1) (y) <= alpha^i (y)$. This checks the ordering
-invariant when one of the indices being compared is the newly-inserted one. Clearly the ordering invariant
-is also maintained when both indices being compared are old.
-]
-
-Next we need to look for intersections; we'll look to the left first and then to the right.
-We start by comparing $alpha^i$ to $alpha^(i-1)$.
-If they clearly intersect, we add an intersection event to the queue. If they have a shuffle intersection,
-we change their order in the current sweep line. Then if $alpha^(i-1)$ blocks $alpha^i$, we stop comparing to the left;
-otherwise, we continue to look at $alpha^(i-2)$.
-(If we compare $alpha^j$ to $alpha^i$ and there is a shuffle intersection, we move $alpha^i$ to the left of $alpha^j$
-while preserving the order of any segments between them.) (TODO: consider rewriting this algorithm as a search for
-the position of the new segment, instead of as an insertion followed by an iterative modification)
-
-#lemma[
-For any sweep-line  $(alpha^1, dots, alpha^m)$ that is $epsilon$-ordered at $y$ and any $i < j < k$, if $alpha^i$ and $alpha^j$
-have a shuffle intersection then $alpha^j$ and $alpha^k$ do not have a shuffle intersection.
-]
+]<lem-insert-preserving-order>
 
 #proof[
-TODO. We need to tweak the definition of shuffle intersections to ensure this. The point is that if we've shuffled to the
-left after the initial insertion, we need to make sure that we don't also try to shuffle to the right.
-I think it should be enough to insist that shuffle intersections only happen when the two segments are in the wrong (exact)
-order at height $y$.
+Since $(alpha^1, ..., alpha^m)$ was $epsilon$-ordered at $y$, it suffices to compare beta with all $alpha^j$.
+So now fix $1 <= j <= m$. If $j >= i + 1$ then
+$beta (y) <= alpha^(i+1) (y) <= alpha^j (y) + epsilon$ (where the last inequality follows because $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered.
+On the other hand, if $j <= i$ then $alpha^j (y) - epsilon <= alpha^i (y) <= beta (y)$.
 ]
+
+(Note that the inequalities $alpha^i (y) <= beta(y) <= alpha^(i+1) (y)$ need to be exact for the proof to work.
+In the face of inexact computations, we might need to do some extra work. It becomes tricky if there are segments near $beta$
+that almost violate the ordering invariant, but we could detect that situation and add an extra clean-up step.)
+
+@lem-insert-preserving-order implies that we can insert a new segment while preserving the ordering invariant. To help
+with the other invariants, we look for shuffle intersections. By @lem-shuffle-transitive and the shuffling invariant
+for the old sweep-line, there cannot be shuffle intersections "on both sides" of $beta$: if $j <= i < k$ then
+$(alpha^j, beta)$ and $(beta, alpha^k)$ cannot both have shuffle intersections (because then @lem-shuffle-transitive would
+imply that $(alpha^j, alpha^k)$ have a shuffle intersection, violating the shuffling invariant). So there are three cases:
+
+- If $beta$ has no shuffle intersections, insert it between $alpha^i$ and $alpha^(i+1)$. This preserves the shuffling invariant trivially.
+- If $beta$ has a shuffle intersection with some $j <= i$, take the smallest such $j$ and insert $beta$ between $alpha^(j-1)$ and $alpha^j$.
+
+  To see that this preserves the ordering invariant, recall that $(alpha^1, ..., alpha^i, beta, alpha^(i+1), ..., alpha^m)$ satisfies the
+  ordering invariant and so we only need to check that $beta lt.curly_(y,epsilon) alpha^k$ for $k = j, ..., i$. But this follows from the
+  fact that $alpha^j lt.curly_(y,epsilon) alpha^k$ for all such $k$, combined with $beta(y) < alpha^j (y)$ (which holds because $(alpha^j, beta)$
+  had a shuffle intersection at $y$).
+
+  To see that this preserves the shuffling invariant, our choice of $j$ ensures that $(alpha^k, beta)$ doesn't shuffle-intersect for any $k < j$.
+  On the other hand, @lem-shuffle-transitive and the shuffling invariant for the old sweep-line imply that $(beta, alpha^k)$ doesn't
+  shuffle-intersect for any $k > j$.
+- If $beta$ has a shuffle intersection with some $j >= i + 1$, take the largest such $j$ and insert $beta$ between $alpha^j$ and $alpha^(j+1)$.
+  By analogous logic to the previous case, this position for $beta$ preserves the ordering and shuffling invariants.
+
+Now that we've found a position for $beta$, we need to test it for clear intersections.
