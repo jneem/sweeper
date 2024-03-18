@@ -6,6 +6,20 @@
 #let def = thmbox("definition", "Definition")
 #let proof = thmproof("proof", "Proof")
 
+#let inexact(term) = {
+  block(inset: 16pt,
+    block(
+      inset: 16pt,
+      stroke: 1pt + gray,
+      radius: 12pt,
+      text(
+        size: 10pt,
+        [Note for inexact arithmetic: #term]
+      )
+    )
+  )
+}
+
 We'll be talking about sweep line algorithms, where the sweep line is horizontal and increasing in $y$.
 Therefore, every line segment "starts" at the coordinate with smaller $y$ and "ends" at the coordinate
 with larger $y$ (we'll assume for now that there are no horizontal segments). We'll parametrize each
@@ -146,11 +160,15 @@ Clearly these definitions satisfy the first desired property (if $(alpha, beta)$
 of intersection). To check that they satisfy the second property requires some more careful analysis (which will only
 work when $epsilon$ is sufficiently large depending on the precision of the floating point numbers we're using),
 but the point is that if $(alpha, beta)$ clearly cross then their "slopes" (not exactly their slopes, but close enough)
-are at least $epsilon$ apart and so we can compute intersections accurately enough. In practice, there will be some numerical
-errors in evaluating these definitions, but that's ok in some cases: if $beta(y)$ is just barely less than $alpha(y)$, we
+are at least $epsilon$ apart and so we can compute intersections accurately enough.
+
+#inexact[
+in practice, there will be some numerical
+errors in evaluating these definitions, but that's ok if we're careful about the error direction: if $beta(y)$ is just barely less than $alpha(y)$, we
 can allow a false negative in the shuffle intersection test, and the numerical stability for the clear intersection
-test will just be a little bit worse. On the other hand, we will insist that if the shuffle intersection test passes
+test will just be a little bit worse. On the other hand, we *insist* that if the shuffle intersection test passes
 then $beta(y)$ is truly less than $alpha(y)$.
+]
 
 #lemma[
 If $(alpha, beta)$ have a shuffle intersection at $y$ then $alpha(y') > beta(y')$ for all $y' in [y, min(y_1 (alpha), y_1 (beta))]$.
@@ -201,9 +219,16 @@ $beta (y) <= alpha^(i+1) (y) <= alpha^j (y) + epsilon$ (where the last inequalit
 On the other hand, if $j <= i$ then $alpha^j (y) - epsilon <= alpha^i (y) <= beta (y)$.
 ]
 
-(Note that the inequalities $alpha^i (y) <= beta(y) <= alpha^(i+1) (y)$ need to be exact for the proof to work.
-In the face of inexact computations, we might need to do some extra work. It becomes tricky if there are segments near $beta$
-that almost violate the ordering invariant, but we could detect that situation and add an extra clean-up step.)
+#inexact[
+the inequalities $alpha^i (y) <= beta(y) <= alpha^(i+1) (y)$ need to be exact for the proof to work.
+In the face of inexact computations, the problematic case is when $beta(y)$ is very close to (say) $alpha^i (y)$
+and there is some $j < i$ with $alpha^j (y)$ very close to $alpha^i(y) + epsilon$. In this case we might
+wrongly think that $beta(y) >= alpha^i (y)$, and by inserting $beta$ after $alpha^i (y)$ we break
+the ordering invariant for $alpha^j$ and $beta$. This case can probably be handled by scanning left from $alpha^i$
+to look for a problematic $alpha^j$; if we find one, ensure that $beta$ goes to the left of it. The correctness arguments
+here require a bit more thought, but I think one important point is that we can't have a "problematic $alpha^j$" in *both*
+directions, because if we did then those two problematic segments would be almost $2 epsilon$ out-of-order.
+]
 
 @lem-insert-preserving-order implies that we can insert a new segment while preserving the ordering invariant. To help
 with the other invariants, we look for shuffle intersections. By @lem-shuffle-transitive and the shuffling invariant
@@ -225,4 +250,36 @@ imply that $(alpha^j, alpha^k)$ have a shuffle intersection, violating the shuff
 - If $beta$ has a shuffle intersection with some $j >= i + 1$, take the largest such $j$ and insert $beta$ between $alpha^j$ and $alpha^(j+1)$.
   By analogous logic to the previous case, this position for $beta$ preserves the ordering and shuffling invariants.
 
-Now that we've found a position for $beta$, we need to test it for clear intersections.
+Now that we've found a position for $beta$, we need to test it for clear intersections. We scan to the left until
+either we find a clear intersection or we find some $alpha^j$ with $alpha^j (y) < beta(y) - epsilon$. (If we find
+a clear intersection, we insert an intersection event in the queue.) Finally we scan to the right until either
+we find a clear intersection of we find some $alpha^j$ with $alpha^j (y) > beta(y) + epsilon$.
+
+#lemma[
+After processing an "enter" event as described above, all sweep-line invariants hold.
+]
+
+#proof[
+We've already explained why the order and shuffle invariants hold, so let's address the crossing invariant.
+Since our algorithm didn't change the relative order of any segments in the old sweep-line, we only need
+to consider future $epsilon$-crossings that involve the new segment $beta$.
+
+Suppose $beta$ was inserted after (not necessarily adjacent to) $alpha^i$, and that they $epsilon$-cross.
+We already showed that the sweep-line has no shuffle intersections, so it follows that $(alpha^i, beta)$ clearly intersect.
+If we encountered $alpha^i$ when scanning for $beta$'s clear intersections, we would have inserted an intersection event for $alpha^i$ and $beta$,
+and that intersection event would witness the crossing invariant. So let's assume that when scanning for $beta$'s clear intersections,
+we stopped the scan at $alpha^j$ for some $j > i$.
+
+There are two reasons we might have stopped the clear intersection scan:
+- if $alpha^j$ clearly intersects $beta$, we inserted an intersection event at some $y$-coordinate that's less than or equal to the
+  true intersection $y$-coordinate. Let $y_j$ be the $y$-coordinate of the intersection event that we inserted. There are two sub-cases:
+  - if the $epsilon$-crossing $alpha^i$ and $beta$ is after $y_j$, then the intersection event between $alpha^j$ and $beta$ witnesses
+    the crossing invariant.
+  - otherwise, the $epsilon$-crossing between $alpha^i$ and $beta$ is before $y_j$, and so it is also before the true intersection between
+    $alpha^j$ and $beta$. Therefore, $alpha^i$ and $alpha^j$ $epsilon$-cross before $alpha^i$ $epsilon$-crosses $beta$. By the
+    crossing invariant for the old sweep-line, the queue contains some witnessing event for the $epsilon$-crossing of $alpha^i$ and $alpha^j$;
+    and this event also witnesses the crossing invariant for the $epsilon$-crossing between $alpha^i$ and $beta$.
+- if $alpha^j(y) < beta(y) - epsilon$ and $alpha^j$ doesn't $epsilon$-cross $beta$, then there are two sub-cases:
+  - if $alpha^j$ ends before $alpha^i$ $epsilon$-crosses $beta$ then the $alpha^j$'s exit event witnesses the crossing invariant.
+  - otherwise, ...
+]
