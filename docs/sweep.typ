@@ -91,7 +91,7 @@ Our sweep-line will maintain three invariants:
 + At every $y$, the sweep-line is $epsilon$-ordered at $y$. (We'll call this the "order" invariant.)
 + For every $y$ and every $1 <= i < j <= m_y$, if $alpha_y^i$ and $alpha_y^j$ $epsilon$-cross
   then the event queue contains an event for some $j' in (i, j)$,
-  and at least one of these events occurs before the $epsilon$-crossing height.
+  and at least one of these events occurs before the $epsilon$-crossing height, or at $y$.
   (We'll call this the "crossing" invariant.)
 
 Hopefully the first invariant is already well-motivated, so let's discuss the second.
@@ -254,3 +254,50 @@ directions, because if we did then those two problematic segments would be almos
 @lem-insert-preserving-order implies that we can insert a new segment while preserving the ordering invariant. By
 @lem-intersection-scan, running an intersection scan restores the crossing invariant.
 Thus, we can insert a new segment while preserving the sweep-line invariants.
+
+== An "exit" event
+
+When a segments exits the sweep-line, the ordering invariant clearly doesn't break.
+Regarding the crossing invariant, it can only break because of $epsilon$-crossing pairs whose
+crossing invariant was witnessed by the exit event that was just processed.
+To restore the crossing invariant, we need to enqueue some new intersection events.
+
+Let $(alpha^1, ..., alpha^m)$ be the sweep-line after removing the just-exited segment
+which, we assume, used to live between $alpha^i$ and $alpha^(i+1)$. It is tempting to
+intersection-scan $alpha^i$ to the right and $alpha^(i+1)$ to the left. By @lem-intersection-scan,
+this ensures that the both $(alpha^1, ..., alpha^(i+1))$ and $(alpha^i, ..., alpha^m)$ satisfy
+the crossing invariant. However, this does not imply that the whole sweep-line satisfies the
+crossing invariant. For example, it is possible that $alpha^(i-1)$ sticks out $2/3 epsilon$
+to the right of $alpha^i$ and $alpha^(i+2)$ sticks out $2/3 epsilon$ to the left of $alpha^(i+1)$,
+and $alpha^(i-1)$ $epsilon$-crosses $alpha^(i+2)$ in violation of the crossing invariant.
+
+To fix this problem, we will need a *strict intersection scan*, which is similar to the previous scan except
+that the stopping criterion is stricter. We'll describe only the leftward version,
+starting at $alpha^i$. As before, we iterate $j$ from $i-1$ down to $1$. Unlike the non-strict version,
+we will keep track of the soonest (i.e. smallest $y$-coordinate) clear intersection we've seen so far; call it $y^*$.
+- If we encounter a shuffle intersection, we add an intersection event, update $y^*$, and continue scanning.
+- If we encounter a clear intersection, we add an intersection event as before; we also update $y^*$ if appropriate.
+  Then we check whether $alpha^j$ is at least $epsilon/2$ to the left of $alpha^j$ for all heights between $y$ and $y^*$.
+  If so, we stop scanning.
+- If we encounter a segment that's at least $epsilon/2$ to the left of $alpha^j$ for all heights between $y$ and $y^*$, we stop scanning.
+
+The point of this strict intersection scan is that it imposes a crossing invariant with half the error (although only for $alpha^i$, and
+only in one direction).
+  
+#lemma[
+Suppose $(alpha^1, ..., alpha^(i-1))$ satisfies the ordering and crossing invariants at $y$, and suppose that
+$(alpha^1, ..., alpha^i)$ satisfies the ordering invariant at $y$. After running a strict intersection scan to the left,
+the following stronger crossing invariant holds: for every $j < i$, if $alpha^j$ $epsilon/2$-crosses $alpha^i$ then the
+event queue contains an event for some $j' in (j, i)$,
+and at least one of these events occurs before the $epsilon/2$-crossing height, or at $y$.
+]<lem-strict-intersection-scan>
+
+#proof[
+TODO
+]
+
+To finish handling the exit event, we run a strict intersection scan to the left of $alpha^i$ and a strict
+intersection scan to the right of $alpha^(i+1)$. These two extra intersection scans ensure that without a witnessing
+event in the queue, nothing "before" $alpha^i$ pokes out more than $epsilon/2$ to its right, and nothing "after"
+$alpha^(i+1)$ pokes out more than $epsilon/2$ to its left. This eliminates the possibility of an unhandled
+$epsilon$-crossing, and ensures that we maintain the crossing invariant.
