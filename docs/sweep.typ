@@ -90,9 +90,13 @@ $(alpha_y^1, ..., alpha_y^(m_y))$.
 Our sweep-line will maintain three invariants:
 + At every $y$, the sweep-line is $epsilon$-ordered at $y$. (We'll call this the "order" invariant.)
 + For every $y$ and every $1 <= i < j <= m_y$, if $alpha_y^i$ and $alpha_y^j$ $epsilon$-cross
-  then the event queue contains an event for some $j' in (i, j)$,
+  then the event queue contains an event between $i$ and $j$,
   and at least one of these events occurs before the $epsilon$-crossing height, or at $y$.
   (We'll call this the "crossing" invariant.)
+
+(When we say the event queue contains an event between $i$ and $j$, we mean that either there's
+an exit event for some $alpha^k$ with $i < k < j$ or there's an intersection event for some $alpha^k$ and $alpha^ell$
+with $i <= k < ell <= j$.)
 
 Hopefully the first invariant is already well-motivated, so let's discuss the second.
 To naively ensure that we find
@@ -116,7 +120,7 @@ to the next event:
   Moreover, if at any $y' > y$ the ordering breaks, two line segments must have $epsilon$-crossed one another by $y'$.
   The third invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
   constraint is maintained.
-+ The crossing invariant is maintained because the set of things to check (i.e. the set of line segments that cross $epsilon$-cross
++ The crossing invariant is maintained because the set of things to check (i.e. the set of line segments that $epsilon$-cross
   one another after $y$) only shrinks as $y$ increases.
 
 == Interaction with adjacent segments
@@ -272,11 +276,12 @@ to the right of $alpha^i$ and $alpha^(i+2)$ sticks out $2/3 epsilon$ to the left
 and $alpha^(i-1)$ $epsilon$-crosses $alpha^(i+2)$ in violation of the crossing invariant.
 
 To fix this problem, we will need a *strict intersection scan*, which is similar to the previous scan except
-that the stopping criterion is stricter. We'll describe only the leftward version,
+that we declare crossings at a threshold of $epsilon/2$ instead of $epsilon$, and
+the stopping criterion is stricter. We'll describe only the leftward version,
 starting at $alpha^i$. As before, we iterate $j$ from $i-1$ down to $1$. Unlike the non-strict version,
 we will keep track of the soonest (i.e. smallest $y$-coordinate) clear intersection we've seen so far; call it $y^*$.
-- If we encounter a shuffle intersection, we add an intersection event, update $y^*$, and continue scanning.
-- If we encounter a clear intersection, we add an intersection event as before; we also update $y^*$ if appropriate.
+- If we encounter an $epsilon/2$-shuffle intersection, we add an intersection event, update $y^*$, and continue scanning.
+- If we encounter as $epsilon/2$-clear intersection, we add an intersection event as before; we also update $y^*$ if appropriate.
   Then we check whether $alpha^j$ is at least $epsilon/2$ to the left of $alpha^j$ for all heights between $y$ and $y^*$.
   If so, we stop scanning.
 - If we encounter a segment that's at least $epsilon/2$ to the left of $alpha^j$ for all heights between $y$ and $y^*$, we stop scanning.
@@ -288,12 +293,20 @@ only in one direction).
 Suppose $(alpha^1, ..., alpha^(i-1))$ satisfies the ordering and crossing invariants at $y$, and suppose that
 $(alpha^1, ..., alpha^i)$ satisfies the ordering invariant at $y$. After running a strict intersection scan to the left,
 the following stronger crossing invariant holds: for every $j < i$, if $alpha^j$ $epsilon/2$-crosses $alpha^i$ then the
-event queue contains an event for some $j' in (j, i)$,
-and at least one of these events occurs before the $epsilon/2$-crossing height, or at $y$.
+event queue contains an event between $j$ and $i$,
+and at least one of these events occurs either before the $epsilon/2$-crossing height or at $y$.
 ]<lem-strict-intersection-scan>
 
 #proof[
-TODO
+  Suppose $j < i$ and $alpha^j$ $epsilon/2$-crosses $alpha^i$. If the strict intersection scan included $j$, it would have
+  inserted an intersection event for $alpha^j$ and $alpha^i$ (which would witness the crossing invariant),
+  so let's suppose that the scan stopped at $k > j$ and recall the definition of $y^*$ (particularly the fact
+  that we inserted an intersection event at height $y^*$). We consider two cases:
+    - If $alpha^j$ $epsilon/2$-crosses $alpha^i$ after $y^*$ then the intersection event at $y^*$ witnesses the crossing invariant.
+    - Otherwise, $alpha^j$ $epsilon/2$-crosses $alpha^i$ before $y^*$. Since $alpha^k$ is at least $epsilon/2$ less to the left
+      of $alpha^i$ up to $y^*$, it follows that $alpha^j$ $epsilon$-crosses $alpha^k$ before it $epsilon/2$-crosses $alpha^i$.
+      By the old crossing invariant, there is an event witnessing $alpha^j$ $epsilon$-crossing $alpha^k$; this same
+      event witnesses $alpha^j$ $epsilon/2$-crossing $alpha^i$.
 ]
 
 To finish handling the exit event, we run a strict intersection scan to the left of $alpha^i$ and a strict
@@ -301,3 +314,52 @@ intersection scan to the right of $alpha^(i+1)$. These two extra intersection sc
 event in the queue, nothing "before" $alpha^i$ pokes out more than $epsilon/2$ to its right, and nothing "after"
 $alpha^(i+1)$ pokes out more than $epsilon/2$ to its left. This eliminates the possibility of an unhandled
 $epsilon$-crossing, and ensures that we maintain the crossing invariant.
+
+== An "intersection" event
+
+I don't think we've asserted this yet, but all intersection events in the queue always occur at a height where
+the two crossing segments are within $epsilon$ of one another. Also, intersection events are only inserted
+for $epsilon$-crossing segments, so it's always clear which order the segments should be in after the intersection.
+
+Suppose our sweep-line is $(alpha^1, ..., alpha^m)$ and we've just encountered an intersection event for $alpha^i$ and $alpha^j$,
+where $i < j$. First, we check whether $alpha^i$ and $alpha^j$ actually need to be swapped, as some other intersection event might
+have already swapped them. If they're already in the correct order, we skip the re-ordering step and move on to the crossing invariant.
+If $alpha^i$ and $alpha^j$
+need to be re-ordered, we consider two possibilities: we can move $alpha^j$ before $alpha^i$ or we can move $alpha^i$ after $alpha^j$.
+If $alpha^i(y) >= alpha^j(y)$ then either choice maintains the ordering invariant:
+
+#lemma[
+Suppose $(alpha^1, ..., alpha^m)$ satisfies the ordering invariant at $y$ and suppose that $i < j$ and $alpha^i (y) >= alpha^j (y)$.
+Then $(alpha^1, ..., alpha^(i-1), alpha^(i+1), ..., alpha^j, alpha^i, alpha^(j+1), ... alpha^m)$ and
+$(alpha^1, ..., alpha^(i-1), alpha^j, alpha^i, ..., alpha^(j-1), alpha^(j+1), ... alpha^m)$ both satisfy the ordering invariant
+at $y$.
+]<lem-reorder>
+
+#proof[
+  The two claims are essentially the same, so we will consider only the first one. When putting $alpha^i$ after $alpha^j$,
+  the only pairs of segments whose order has changed are $(alpha^i, alpha^k)$ pairs for $i < k <= j$; hence, we only need
+  to re-check the ordering invariant for those pairs. But for such $k$, the old ordering invariant implies
+  that $alpha^k(y) - epsilon <= alpha^j (y)$, and since we assumed $alpha^j (y) <= alpha^i (y)$ it follows that
+  $alpha^k (y) - epsilon <= alpha^i (y)$. Therefore, $alpha^i$ and $alpha^k$ satisfy the new ordering invariant.
+]
+
+It is possible, however that $alpha^i (y) < alpha^j (y)$. This is likely, even, because we tend to create intersection events
+with a height that lower-bounds the actual intersection height. So in general we have a slightly more complex procedure:
+choose $k$ with $i < k <= j$ to be the largest possible such that $alpha^k (y) <= alpha^i (y)$. Then move $alpha^i$ after $alpha^k$.
+(This preserves the ordering invariant by @lem-reorder.) Finally, move $alpha^j$ before $alpha^i$'s new position. This maintains
+the ordering invariant because the only pairs whose orders change were pairs of the form $(alpha^ell, alpha^j)$ for $k <= ell < j$
+and the definition of $k$ ensures that $alpha^ell (y) >= alpha^i (y)$ (which is guaranteed to be at least $alpha^j (y) - epsilon$
+by the fact that there was an intersection event).
+
+=== Maintaining the crossing invariant
+
+The final thing we need to do is explain how we maintain the crossing invariant. We'll do this in a slightly abstracted situation:
+we have a sweep-line $(alpha^1, ..., alpha^m)$ that satisfies both invariants, and we move $alpha^i$ to after $alpha^j$ in such
+a way that the ordering invariant is maintained. How do we maintain the crossing invariant? (The intersection-event processing
+contains up to two of these "moves," so if we describe how to maintain the crossing invariant after one of these moves, we'll just
+have to repeat that.)
+
+In order to handle the crossing invariant of one swap, we treat it as an "exit" followed by an "entrance." That is,
+to handle the removal of $alpha^i$ from its old location we run intersection scans on $alpha^(i-1)$ (strict to the left; non-strict
+to the right) and $alpha^(i+1)$ (strict to the right; non-strict to the left). Then we run a (non-strict) intersection scan on $alpha^i$
+in its new location.
