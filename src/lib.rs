@@ -11,7 +11,9 @@ pub type Float = NotNan<f64>;
 
 pub mod equivalence;
 pub mod exact;
+pub mod geom;
 pub mod interval;
+pub mod num;
 pub mod types;
 
 pub use types::{Crosses, Interaction, Point, Segment, Vector};
