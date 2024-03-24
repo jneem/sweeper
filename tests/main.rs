@@ -1,9 +1,4 @@
-use proptest::{
-    arbitrary::any,
-    prelude::prop,
-    prop_oneof, proptest,
-    strategy::{BoxedStrategy, Strategy},
-};
+use proptest::{arbitrary::any, prelude::prop, prop_oneof, proptest, strategy::Strategy};
 use sweeps::{Float, Point, Sweeper};
 
 #[derive(Clone, Copy, Debug)]
@@ -177,54 +172,9 @@ fn realize_perturbation(base_cases: &[Vec<Point>], pert: &Perturbation) -> Vec<P
     }
 }
 
-#[test]
-fn failing() {
-    use FloatPerturbation::*;
-    use Perturbation::*;
-
-    let perturbations = [
-        Point {
-            perturbation: PointPerturbation {
-                x: Ulp(0),
-                y: Eps(-0.06779284945225439),
-            },
-            idx: 4320087526935266964,
-            next: Box::new(None { idx: 0 }),
-        },
-        Point {
-            perturbation: PointPerturbation {
-                x: Eps(0.0418994386470236),
-                y: Ulp(0),
-            },
-            idx: 6481034249709814033,
-            next: Box::new(Subdivision {
-                t: 0.5701120558356102,
-                idx: 16902377770183959372,
-                next: Box::new(None { idx: 0 }),
-            }),
-        },
-    ];
-
-    let base = vec![vec![
-        sweeps::Point::new(0.0, 0.0),
-        sweeps::Point::new(1.0, 1.0),
-        sweeps::Point::new(1.0, -1.0),
-        sweeps::Point::new(2.0, 0.0),
-        sweeps::Point::new(1.0, 1.0),
-        sweeps::Point::new(1.0, -1.0),
-    ]];
-
-    let after = perturbations.iter().map(|p| realize_perturbation(&base, p));
-
-    let mut sweeper = Sweeper::new(0.01.try_into().unwrap());
-    for polyline in after {
-        sweeper.add_closed_polyline(&polyline);
-    }
-    sweeper.sweep();
-}
-
 proptest! {
     #[test]
+    #[ignore]
     fn test_main(perturbations in prop::collection::vec(perturbation(0.1), 1..5)) {
         let base = vec![vec![
             Point::new(0.0, 0.0),

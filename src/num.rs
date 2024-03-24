@@ -21,6 +21,8 @@ pub trait Float:
 {
     fn from(x: f32) -> Self;
 
+    fn to_exact(&self) -> Rational;
+
     // These next two exist only to support `Bounds`, because this is easier
     // than adding `{add,sub,mul,div}_rounding_{up,down}`. Rational is allowed
     // to have the identity function for both of these.
@@ -31,6 +33,10 @@ pub trait Float:
 impl Float for Rational {
     fn from(x: f32) -> Self {
         Rational::try_from(x).unwrap()
+    }
+
+    fn to_exact(&self) -> Rational {
+        self.clone()
     }
 
     fn next_down(&self) -> Self {
@@ -47,6 +53,10 @@ impl Float for NotNan<f32> {
         NotNan::try_from(x).unwrap()
     }
 
+    fn to_exact(&self) -> Rational {
+        self.into_inner().try_into().unwrap()
+    }
+
     fn next_down(&self) -> Self {
         self.into_inner().next_down().try_into().unwrap()
     }
@@ -59,6 +69,10 @@ impl Float for NotNan<f32> {
 impl Float for NotNan<f64> {
     fn from(x: f32) -> Self {
         NotNan::try_from(f64::from(x)).unwrap()
+    }
+
+    fn to_exact(&self) -> Rational {
+        self.into_inner().try_into().unwrap()
     }
 
     fn next_down(&self) -> Self {
@@ -104,11 +118,18 @@ impl<F: Float> Bounds<F> {
         }
     }
 
-    pub fn ge(self, other: &F) -> bool {
+    pub fn max(self, low: F) -> Self {
+        Self {
+            lower: self.lower.max(low.clone()),
+            upper: self.upper.max(low),
+        }
+    }
+
+    pub fn ge(&self, other: &F) -> bool {
         self.lower >= *other
     }
 
-    pub fn le(self, other: &F) -> bool {
+    pub fn le(&self, other: &F) -> bool {
         self.upper <= *other
     }
 }
@@ -141,8 +162,12 @@ impl<F: Float> std::ops::Div<Bounds<F>> for Bounds<F> {
     fn div(self, denom: Bounds<F>) -> Bounds<F> {
         let zero = F::from(0.0);
 
-        if (denom.lower > zero) != (denom.upper > zero) || denom.lower == zero {
-            panic!("dividing gives full bounds");
+        if denom.lower <= zero && denom.upper >= zero {
+            // Technically, when working with floats we could return the "full"
+            // bounds range from -infty to infty. But we can't do that with
+            // Rational, and anyway division by a range containing zero probably
+            // indicates a bug.
+            panic!("division by zero");
         }
 
         if denom.upper < zero {
@@ -173,5 +198,78 @@ pub fn convex<F: Float>(a: &F, b: &F, t: &Bounds<F>) -> Bounds<F> {
                 .next_down(),
             upper: (a.clone() + (t.lower.clone() * (b.clone() - a).next_up()).next_up()).next_up(),
         },
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // Kind of like Arbitrary, but
+    // - it's a local trait, so we can impl it for whatever we want, and
+    // - it only returns "reasonable" values.
+    pub trait Reasonable {
+        type Strategy: Strategy<Value = Self>;
+        fn reasonable() -> Self::Strategy;
+    }
+
+    impl<S: Reasonable, T: Reasonable> Reasonable for (S, T) {
+        type Strategy = (S::Strategy, T::Strategy);
+
+        fn reasonable() -> Self::Strategy {
+            (S::reasonable(), T::reasonable())
+        }
+    }
+
+    impl Reasonable for NotNan<f32> {
+        type Strategy = BoxedStrategy<NotNan<f32>>;
+
+        fn reasonable() -> Self::Strategy {
+            (-1e6f32..1e6).prop_map(|x| NotNan::new(x).unwrap()).boxed()
+        }
+    }
+
+    impl Reasonable for NotNan<f64> {
+        type Strategy = BoxedStrategy<NotNan<f64>>;
+
+        fn reasonable() -> Self::Strategy {
+            (-1e6..1e6).prop_map(|x| NotNan::new(x).unwrap()).boxed()
+        }
+    }
+
+    impl Reasonable for Rational {
+        type Strategy = BoxedStrategy<Rational>;
+
+        fn reasonable() -> Self::Strategy {
+            (-1e6..1e6)
+                .prop_map(|x| Rational::try_from(x).unwrap())
+                .boxed()
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn bounds_add(x in NotNan::<f64>::reasonable(), y in NotNan::<f64>::reasonable()) {
+            let b = Bounds::single(x) + Bounds::single(y);
+            assert!(b.lower <= x + y);
+            assert!(b.upper >= x + y);
+        }
+
+        #[test]
+        fn bounds_sub(x in NotNan::<f64>::reasonable(), y in NotNan::<f64>::reasonable()) {
+            let b = Bounds::single(x) - Bounds::single(y);
+            assert!(b.lower <= x - y);
+            assert!(b.upper >= x - y);
+        }
+
+        #[test]
+        fn bounds_div(x in NotNan::<f64>::reasonable(), y in NotNan::<f64>::reasonable()) {
+            if y.abs() > 1e-3 {
+                let b = Bounds::single(x) / Bounds::single(y);
+                assert!(b.lower <= x / y);
+                assert!(b.upper >= x / y);
+            }
+        }
     }
 }
