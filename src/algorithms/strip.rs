@@ -185,7 +185,9 @@ pub enum InsertionResult<F: Float> {
 
 impl<F: Float> Strip<F> {
     pub fn check_new_seg(&self, idx: usize, seg: &StripSeg<F>, eps: &F) -> InsertionResult<F> {
-        // TODO: assert that the x0 position is ok
+        // Precondition: the index is appropriate for the start-coordinate of `seg`.
+        assert!(idx == 0 || self.segs[idx - 1].x0 <= seg.x0);
+        assert!(idx == self.segs.len() || self.segs[idx].x0 >= seg.x0);
 
         let ok_left = idx == 0 || self.segs[idx - 1].x1 <= seg.x1;
         let ok_right = idx == self.segs.len() || seg.x1 <= self.segs[idx].x1;
@@ -283,7 +285,7 @@ mod tests {
 
     use super::*;
 
-    fn strip(
+    fn mk_strip(
         y0: f64,
         y1: f64,
         iter: impl IntoIterator<Item = (f64, f64)>,
@@ -345,7 +347,7 @@ mod tests {
     #[test]
     fn test_check() {
         let eps = NotNan::new(0.1).unwrap();
-        let (mut segs, strip) = strip(0.0, 1.0, [(0.0, 0.0), (1.0, 1.0)]);
+        let (mut segs, strip) = mk_strip(0.0, 1.0, [(0.0, 0.0), (1.0, 1.0)]);
 
         let s = add_seg(&mut segs, (0.5, 0.0), (0.5, 1.0));
         assert_matches!(strip.check_new_seg(1, &s, &eps), InsertionResult::Exact);
@@ -386,6 +388,19 @@ mod tests {
         assert_matches!(
             strip.check_new_seg(1, &s, &eps),
             InsertionResult::Intersected(_, _)
+        );
+
+        // Thin strips. When the strip is this thin, perturbations are basically always allowed.
+        let y1 = 0.0f64.next_up();
+        let (mut segs, strip) = mk_strip(0.0, y1, [(0.0, 0.0), (1.0, 1.0)]);
+
+        let s = add_seg(&mut segs, (0.2, 0.0), (0.2, y1));
+        assert_matches!(strip.check_new_seg(1, &s, &eps), InsertionResult::Exact);
+
+        let s = add_seg(&mut segs, (0.2, 0.0), (-0.2, y1));
+        assert_matches!(
+            strip.check_new_seg(1, &s, &eps),
+            InsertionResult::Perturbed(_, _)
         );
 
         // TODO: check some known-difficult cases (thin strips, coincident points, etc)
