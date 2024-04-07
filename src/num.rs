@@ -18,6 +18,7 @@ pub trait Float:
     + Ord
     + Eq
     + Hash
+    + 'static
 {
     fn from(x: f32) -> Self;
 
@@ -28,6 +29,8 @@ pub trait Float:
     // to have the identity function for both of these.
     fn next_down(&self) -> Self;
     fn next_up(&self) -> Self;
+
+    fn abs(self) -> Self;
 }
 
 impl Float for Rational {
@@ -45,6 +48,10 @@ impl Float for Rational {
 
     fn next_up(&self) -> Self {
         self.clone()
+    }
+
+    fn abs(self) -> Self {
+        <Rational as malachite::num::arithmetic::traits::Abs>::abs(self)
     }
 }
 
@@ -64,6 +71,10 @@ impl Float for NotNan<f32> {
     fn next_up(&self) -> Self {
         self.into_inner().next_up().try_into().unwrap()
     }
+
+    fn abs(self) -> Self {
+        self.into_inner().abs().try_into().unwrap()
+    }
 }
 
 impl Float for NotNan<f64> {
@@ -81,6 +92,10 @@ impl Float for NotNan<f64> {
 
     fn next_up(&self) -> Self {
         self.into_inner().next_up().try_into().unwrap()
+    }
+
+    fn abs(self) -> Self {
+        self.into_inner().abs().try_into().unwrap()
     }
 }
 
@@ -265,7 +280,7 @@ pub(crate) mod tests {
 
         #[test]
         fn bounds_div(x in NotNan::<f64>::reasonable(), y in NotNan::<f64>::reasonable()) {
-            if y.abs() > 1e-3 {
+            if y.abs().into_inner() > 1e-3 {
                 let b = Bounds::single(x) / Bounds::single(y);
                 assert!(b.lower <= x / y);
                 assert!(b.upper >= x / y);

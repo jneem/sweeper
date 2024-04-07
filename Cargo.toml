@@ -13,6 +13,7 @@ robust = "1.1.0"
 
 [dev-dependencies]
 anyhow = "1.0.80"
+assert_matches = "1.5.0"
 clap = { version = "4.5.1", features = ["derive"] }
 proptest = "1.4.0"
 svg = { version = "0.15.1", default-features = false }

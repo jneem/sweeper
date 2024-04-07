@@ -1,3 +1,5 @@
+use std::collections::BinaryHeap;
+
 use crate::{geom::Segment, num::Float};
 
 /// Throughout this library, we assign identities to segments, so that we may
@@ -59,9 +61,11 @@ impl<F: Float> std::fmt::Debug for SweepEvent<F> {
 }
 
 pub struct Segments<F: Float> {
-    segs: Vec<Segment<F>>,
-    contour_prev: Vec<SegIdx>,
-    contour_next: Vec<SegIdx>,
+    // TODO: make fields private; provide accessors and constructors
+    pub segs: Vec<Segment<F>>,
+    // TODO: support open paths too. Maybe reserve SegIdx(0)? Or SegIdx(usize::MAX)?
+    pub contour_prev: Vec<SegIdx>,
+    pub contour_next: Vec<SegIdx>,
 }
 
 impl<F: Float> Segments<F> {
