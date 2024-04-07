@@ -1,5 +1,3 @@
-use std::collections::BinaryHeap;
-
 use crate::{geom::Segment, num::Float};
 
 /// Throughout this library, we assign identities to segments, so that we may
@@ -71,6 +69,10 @@ pub struct Segments<F: Float> {
 impl<F: Float> Segments<F> {
     pub fn get(&self, idx: SegIdx) -> &Segment<F> {
         &self.segs[idx.0]
+    }
+
+    pub fn indices(&self) -> impl Iterator<Item = SegIdx> {
+        (0..self.segs.len()).map(SegIdx)
     }
 }
 

@@ -59,6 +59,7 @@ pub struct StripSeg<F: Float> {
     x1: F,
 }
 
+#[derive(Debug, Clone)]
 pub struct PreStrip<F: Float> {
     /// Start height of this strip.
     y0: F,
@@ -104,6 +105,7 @@ impl<F: Float> PreStrip<F> {
 
         queue.advance();
 
+        // FIXME: this is wrong for disconnected sets
         if active.is_empty() {
             return None;
         }
@@ -126,6 +128,19 @@ impl<F: Float> PreStrip<F> {
             .collect();
         active.sort_by_key(|seg| (seg.x1.clone() - &seg.x0).abs());
         Some(PreStrip { y0, y1, active })
+    }
+
+    pub fn truncate(&mut self, segments: &Segments<F>, y1: &F) {
+        assert!(y1 > &self.y0);
+
+        self.y1 = y1.clone();
+        for s in &mut self.active {
+            s.x1 = segments.get(s.idx).at_y(y1);
+        }
+        // Because of numerical errors, the sort order probably won't be completely correct anymore.
+        // It's probably close enough not to matter, but we re-sort anyway.
+        self.active
+            .sort_by_key(|seg| (seg.x1.clone() - &seg.x0).abs());
     }
 
     /// Try to build the full strip, failing if we encounter an intersection.
@@ -158,6 +173,7 @@ impl<F: Float> PreStrip<F> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Strip<F: Float> {
     /// Start height of this strip.
     y0: F,
@@ -217,7 +233,6 @@ impl<F: Float> Strip<F> {
                 let ok_right =
                     j == self.segs.len() || (seg.x1.clone() - &self.segs[j].x1) * &dy <= threshold;
 
-                dbg!(j, ok_left, ok_right, &dy, &threshold);
                 ok_left && ok_right
             };
 
@@ -249,7 +264,6 @@ impl<F: Float> Strip<F> {
                 assert!(j < self.segs.len());
 
                 let other = &self.segs[j];
-                dbg!(&seg, &other);
                 assert!((seg.x0 > other.x0) == (seg.x1 < other.x1));
 
                 let d0 = seg.x0.clone() - &other.x0;
@@ -274,6 +288,44 @@ impl<F: Float> Strip<F> {
         assert_sorted(self.segs.iter().map(|i| &i.x0));
         assert_sorted(self.segs.iter().map(|i| &i.x1));
     }
+}
+
+pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<Strip<F>> {
+    let mut events = EventQueue {
+        queue: segments
+            .indices()
+            .flat_map(|idx| {
+                let (a, b) = SweepEvent::from_segment(idx, segments);
+                [a, b]
+            })
+            .collect(),
+    };
+
+    let first_y = events.queue.first().expect("no segments!").y.clone();
+    let mut strip = Strip {
+        y0: first_y.clone(),
+        y1: first_y,
+        segs: Vec::new(),
+    };
+
+    let mut strips = Vec::new();
+    while let Some(mut pre) = PreStrip::from_prev_strip(&strip, segments, &mut events) {
+        let s = loop {
+            match pre.build(eps) {
+                Ok(s) => {
+                    break s;
+                }
+                Err(intersection) => {
+                    pre.truncate(segments, &intersection.y);
+                    events.queue.insert(intersection);
+                }
+            }
+        };
+        strips.push(s.clone());
+        strip = s;
+    }
+
+    strips
 }
 
 #[cfg(test)]
@@ -405,5 +457,13 @@ mod tests {
 
         // TODO: check some known-difficult cases (thin strips, coincident points, etc)
         // TODO: involve proptest
+    }
+
+    #[test]
+    fn test_sweep() {
+        let eps = NotNan::new(0.1).unwrap();
+        let (segs, _strip) = mk_strip(0.0, 1.0, [(0.0, 0.0), (1.0, 1.0), (-2.0, 2.0)]);
+        let strips = sweep(&segs, &eps);
+        assert_eq!(3, strips.len());
     }
 }
