@@ -31,6 +31,7 @@ impl<F: Float> OutSegments<F> {
 /// Our queue of events. Classically, this should be a priority queue but this algorithm requires
 /// a `BTreeMap` because we need to iterate over all events at the next (potential) sweep-line
 /// without actually removing them from the queue.
+#[derive(Debug)]
 pub struct EventQueue<F: Float> {
     queue: BTreeSet<SweepEvent<F>>,
 }
@@ -105,18 +106,8 @@ impl<F: Float> PreStrip<F> {
 
         queue.advance();
 
-        // FIXME: this is wrong for disconnected sets
-        if active.is_empty() {
-            return None;
-        }
-
-        let y1 = queue
-            .peek()
-            .expect("we have active segments but nothing in the queue")
-            .next()
-            .expect("peek returned empty")
-            .y
-            .clone();
+        // If there's nothing left in the queue, we're done; return None.
+        let y1 = queue.peek()?.next().expect("peek returned empty").y.clone();
 
         let mut active: Vec<_> = active
             .into_iter()
@@ -236,7 +227,7 @@ impl<F: Float> Strip<F> {
                 ok_left && ok_right
             };
 
-            if let Some(j) = (i_start..i_stop).position(ok_at) {
+            if let Some(j) = (i_start..=i_stop).position(ok_at) {
                 let mut x0 = seg.x0.clone();
                 let mut x1 = seg.x1.clone();
 
@@ -257,14 +248,31 @@ impl<F: Float> Strip<F> {
 
                 InsertionResult::Perturbed(j, perturbed)
             } else {
-                // Index of a segment that definitely intersects us.
-                let j = i_start.checked_sub(1).unwrap_or(i_stop);
-                // If i_start is 0 and i_stop is self.segs.len(), everything had an x0 coordinate that
-                // was close to ours, and so we must have succeeded in perturbing.
-                assert!(j < self.segs.len());
+                // Index of a segment that definitely intersects us. We have tried to insert ourselves
+                // between i_start and i_stop (inclusive), meaning that we have compared ourselves to
+                // indices i_start-1 through i_stop. There must be a robust intersection somewhere in
+                // that range.
+                let j_start = i_start.saturating_sub(1);
+                let j_stop = i_stop.min(self.segs.len() - 1);
+
+                let j = (j_start..=j_stop)
+                    .position(|j| {
+                        // We start left and finish right of segs[j]
+                        ((self.segs[j].x0.clone() - &seg.x0) * &dy >= threshold
+                            && (seg.x1.clone() - &self.segs[j].x1) * &dy >= threshold)
+                        ||
+                        // We start right and finish left of segs[j]
+                        ((seg.x0.clone() - &self.segs[j].x0) * &dy >= threshold
+                         && (self.segs[j].x1.clone() - &seg.x1) * &dy >= threshold)
+                    })
+                    .unwrap()
+                    + j_start;
 
                 let other = &self.segs[j];
-                assert!((seg.x0 > other.x0) == (seg.x1 < other.x1));
+                assert!(
+                    (seg.x0 > other.x0) == (seg.x1 < other.x1),
+                    "non-crossing \"intersection\": {seg:?} and {other:?},\nsegs {:#?} at {idx} (searched {i_start}..{i_stop})", self.segs,
+                );
 
                 let d0 = seg.x0.clone() - &other.x0;
                 let d1 = other.x1.clone() - &seg.x1;
@@ -332,8 +340,12 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<Strip<F>> {
 mod tests {
     use assert_matches::assert_matches;
     use ordered_float::NotNan;
+    use proptest::prelude::*;
 
-    use crate::geom::Segment;
+    use crate::{
+        geom::Segment,
+        perturbation::{realize_perturbation, FloatPerturbation, Perturbation, PointPerturbation},
+    };
 
     use super::*;
 
@@ -465,5 +477,114 @@ mod tests {
         let (segs, _strip) = mk_strip(0.0, 1.0, [(0.0, 0.0), (1.0, 1.0), (-2.0, 2.0)]);
         let strips = sweep(&segs, &eps);
         assert_eq!(3, strips.len());
+    }
+
+    fn p(x: f64, y: f64) -> Point<NotNan<f64>> {
+        Point::new(x.try_into().unwrap(), y.try_into().unwrap())
+    }
+
+    fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
+        xs.windows(2)
+            .map(|pair| (&pair[0], &pair[1]))
+            .chain(xs.last().zip(xs.first()))
+    }
+
+    #[test]
+    fn failing() {
+        use FloatPerturbation::*;
+        use Perturbation::*;
+        let perturbations = [
+            Subdivision {
+                t: 0.7207724457360821,
+                idx: 329077434078203625,
+                next: Box::new(Base { idx: 0 }),
+            },
+            Point {
+                perturbation: PointPerturbation {
+                    x: Eps(-0.08580183224547851),
+                    y: Eps(0.04399391563513059),
+                },
+                idx: 3698181003372502639,
+                next: Box::new(Base { idx: 0 }),
+            },
+            Point {
+                perturbation: PointPerturbation {
+                    x: Eps(0.04566503440641999),
+                    y: Ulp(0),
+                },
+                idx: 2994486720789436495,
+                next: Box::new(Base { idx: 0 }),
+            },
+        ];
+        let base = vec![vec![
+            p(0.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+            p(2.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+        ]];
+
+        let perturbed_polylines = perturbations
+            .iter()
+            .map(|p| realize_perturbation(&base, p))
+            .collect::<Vec<_>>();
+        let segs = Segments {
+            segs: perturbed_polylines
+                .iter()
+                .flat_map(|poly| {
+                    cyclic_pairs(poly).map(|(p0, p1)| Segment {
+                        start: p0.min(p1).clone(),
+                        end: p0.max(p1).clone(),
+                    })
+                })
+                .collect(),
+            contour_prev: vec![],
+            contour_next: vec![],
+        };
+
+        let eps = NotNan::new(0.1).unwrap();
+        let strips = sweep(&segs, &eps);
+        for strip in &strips {
+            strip.check_invariants(&segs);
+        }
+    }
+
+    proptest! {
+    #[test]
+    fn perturbation_test(perturbations in prop::collection::vec(crate::perturbation::perturbation(0.1), 1..5)) {
+        let base = vec![vec![
+            p(0.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+            p(2.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+        ]];
+
+        let perturbed_polylines = perturbations
+            .iter()
+            .map(|p| realize_perturbation(&base, p))
+            .collect::<Vec<_>>();
+        let segs = Segments {
+            segs: perturbed_polylines
+                .iter()
+                .flat_map(|poly| {
+                    cyclic_pairs(poly).map(|(p0, p1)| Segment {
+                        start: p0.min(p1).clone(),
+                        end: p0.max(p1).clone(),
+                    })
+                })
+                .collect(),
+            contour_prev: vec![],
+            contour_next: vec![],
+        };
+
+        let eps = NotNan::new(0.1).unwrap();
+        let strips = sweep(&segs, &eps);
+        for strip in &strips {
+            strip.check_invariants(&segs);
+        }
+    }
     }
 }
