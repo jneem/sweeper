@@ -1,34 +1,41 @@
 use ordered_float::NotNan;
 use proptest::{arbitrary::any, prop_oneof, strategy::Strategy};
 
-use crate::geom::Point;
-
-// TODO: Support perturbations for more types
-type Float = NotNan<f64>;
+use crate::{geom::Point, num::Float};
 
 #[derive(Clone, Copy, Debug)]
-pub enum FloatPerturbation {
+pub enum F64Perturbation {
     /// Perturb by between -128 and 127 ulps.
     Ulp(i8),
     /// Perturb by a bounded additive amount.
     Eps(f64),
 }
 
-impl FloatPerturbation {
-    fn apply(&self, f: Float) -> Float {
+// The Debug bound is because some of the proptest strategy builders want it. Having it here is
+// easier than copying it everywhere.
+pub trait FloatPerturbation: std::fmt::Debug {
+    type Float: crate::num::Float;
+
+    fn apply(&self, f: &Self::Float) -> Self::Float;
+}
+
+impl FloatPerturbation for F64Perturbation {
+    type Float = NotNan<f64>;
+
+    fn apply(&self, f: &NotNan<f64>) -> NotNan<f64> {
         match self {
-            FloatPerturbation::Ulp(n) => {
+            F64Perturbation::Ulp(n) => {
                 let same_sign = (*n > 0) == (f.into_inner() > 0.0);
                 let sign_bit = 1 << 63;
                 match f.classify() {
                     std::num::FpCategory::Nan => unreachable!(),
-                    std::num::FpCategory::Infinite => f,
+                    std::num::FpCategory::Infinite => *f,
                     std::num::FpCategory::Zero => {
                         let mut bits = n.unsigned_abs() as u64;
                         if *n < 0 {
                             bits |= sign_bit;
                         }
-                        Float::new(f64::from_bits(bits)).unwrap()
+                        NotNan::new(f64::from_bits(bits)).unwrap()
                     }
                     std::num::FpCategory::Subnormal => {
                         let bits = f.abs().to_bits();
@@ -37,7 +44,7 @@ impl FloatPerturbation {
                         } else {
                             bits.abs_diff(n.unsigned_abs() as u64)
                         };
-                        Float::new(f.signum() * f64::from_bits(bits)).unwrap()
+                        NotNan::new(f.signum() * f64::from_bits(bits)).unwrap()
                     }
                     std::num::FpCategory::Normal => {
                         let delta = if same_sign {
@@ -53,79 +60,86 @@ impl FloatPerturbation {
                         } else {
                             f64::from_bits(bits)
                         };
-                        Float::new(f.signum() * x).unwrap()
+                        NotNan::new(f.signum() * x).unwrap()
                     }
                 }
             }
-            FloatPerturbation::Eps(x) => f + x,
+            F64Perturbation::Eps(x) => f + x,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct PointPerturbation {
-    pub x: FloatPerturbation,
-    pub y: FloatPerturbation,
+pub struct PointPerturbation<P: FloatPerturbation> {
+    pub x: P,
+    pub y: P,
 }
 
-impl PointPerturbation {
-    pub fn apply(&self, p: Point<Float>) -> Point<Float> {
+impl<P: FloatPerturbation> PointPerturbation<P> {
+    pub fn apply(&self, p: Point<P::Float>) -> Point<P::Float> {
         Point {
-            x: self.x.apply(p.x),
-            y: self.y.apply(p.y),
+            x: self.x.apply(&p.x),
+            y: self.y.apply(&p.y),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum Perturbation {
+pub enum Perturbation<P: FloatPerturbation> {
     Base {
         idx: usize,
     },
     Point {
-        perturbation: PointPerturbation,
+        perturbation: PointPerturbation<P>,
         idx: usize,
-        next: Box<Perturbation>,
+        next: Box<Perturbation<P>>,
     },
     Subdivision {
         // Between 0.0 and 1.0
-        t: f64,
+        t: P::Float,
         idx: usize,
-        next: Box<Perturbation>,
+        next: Box<Perturbation<P>>,
     },
     Superimposition {
-        left: Box<Perturbation>,
-        right: Box<Perturbation>,
+        left: Box<Perturbation<P>>,
+        right: Box<Perturbation<P>>,
     },
 }
 
-pub fn float_perturbation(eps: f64) -> impl Strategy<Value = FloatPerturbation> {
+pub fn f64_perturbation(eps: f64) -> impl Strategy<Value = F64Perturbation> + Clone {
     prop_oneof![
-        any::<i8>().prop_map(FloatPerturbation::Ulp),
-        (-eps..=eps).prop_map(FloatPerturbation::Eps)
+        any::<i8>().prop_map(F64Perturbation::Ulp),
+        (-eps..=eps).prop_map(F64Perturbation::Eps)
     ]
 }
 
-pub fn point_perturbation(eps: f64) -> impl Strategy<Value = PointPerturbation> {
-    (float_perturbation(eps), float_perturbation(eps)).prop_map(|(x, y)| PointPerturbation { x, y })
+pub fn point_perturbation<P: FloatPerturbation>(
+    fp: impl Strategy<Value = P> + Clone,
+) -> impl Strategy<Value = PointPerturbation<P>> {
+    (fp.clone(), fp).prop_map(|(x, y)| PointPerturbation { x, y })
 }
 
-pub fn perturbation(eps: f64) -> impl Strategy<Value = Perturbation> {
+pub fn perturbation<P: FloatPerturbation + 'static>(
+    fp: impl Strategy<Value = P> + Clone + 'static,
+) -> impl Strategy<Value = Perturbation<P>> {
     let leaf = any::<usize>().prop_map(|idx| Perturbation::Base { idx });
     leaf.prop_recursive(3, 16, 8, move |inner| {
         prop_oneof![
-            (point_perturbation(eps), any::<usize>(), inner.clone()).prop_map(
-                |(perturbation, idx, next)| {
+            (
+                point_perturbation(fp.clone()),
+                any::<usize>(),
+                inner.clone()
+            )
+                .prop_map(|(perturbation, idx, next)| {
                     Perturbation::Point {
                         perturbation,
                         idx,
                         next: Box::new(next),
                     }
-                }
-            ),
-            (0.0..1.0, any::<usize>(), inner.clone()).prop_map(|(t, idx, next)| {
+                }),
+            (0.0f32..1.0, any::<usize>(), inner.clone()).prop_map(|(t, idx, next)| {
                 Perturbation::Subdivision {
-                    t,
+                    t: Float::from(t),
                     idx,
                     next: Box::new(next),
                 }
@@ -148,10 +162,10 @@ fn index_mut<T>(arr: &mut [T], idx: usize) -> &mut T {
     &mut arr[idx % arr.len()]
 }
 
-pub fn realize_perturbation(
-    base_cases: &[Vec<Point<Float>>],
-    pert: &Perturbation,
-) -> Vec<Point<Float>> {
+pub fn realize_perturbation<P: FloatPerturbation>(
+    base_cases: &[Vec<Point<P::Float>>],
+    pert: &Perturbation<P>,
+) -> Vec<Point<P::Float>> {
     match pert {
         Perturbation::Base { idx } => index(base_cases, *idx).to_owned(),
         Perturbation::Point {
@@ -169,7 +183,7 @@ pub fn realize_perturbation(
             let idx = *idx % next.len();
             let p0 = index(&next, idx).clone();
             let p1 = index(&next, idx + 1).clone();
-            next.insert(idx + 1, p0.affine(&p1, &Float::new(*t).unwrap()));
+            next.insert(idx + 1, p0.affine(&p1, t));
             next
         }
         Perturbation::Superimposition { left, right } => {

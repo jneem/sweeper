@@ -355,7 +355,10 @@ mod tests {
     use ordered_float::NotNan;
     use proptest::prelude::*;
 
-    use crate::{geom::Segment, perturbation::realize_perturbation};
+    use crate::{
+        geom::Segment,
+        perturbation::{f64_perturbation, perturbation, realize_perturbation},
+    };
 
     use super::*;
 
@@ -501,7 +504,7 @@ mod tests {
 
     proptest! {
     #[test]
-    fn perturbation_test(perturbations in prop::collection::vec(crate::perturbation::perturbation(0.1), 1..5)) {
+    fn perturbation_test(perturbations in prop::collection::vec(perturbation(f64_perturbation(0.1)), 1..5)) {
         let base = vec![vec![
             p(0.0, 0.0),
             p(1.0, 1.0),
