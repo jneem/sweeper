@@ -29,7 +29,7 @@ impl<F: Float> Point<F> {
 
     // Panics on nans. Should be fine as long as everything is finite.
     pub fn affine(&self, other: &Self, t: &F) -> Self {
-        let one = F::from(1.0);
+        let one = F::from_f32(1.0);
         Point {
             x: (one.clone() - t) * &self.x + t.clone() * &other.x,
             y: (one - t) * &self.y + t.clone() * &other.y,
@@ -93,14 +93,14 @@ impl<F: Float> Segment<F> {
         assert!((&self.start.y..=&self.end.y).contains(&y));
 
         let denom = Bounds::single(self.end.y.clone()) - Bounds::single(self.start.y.clone());
-        let zero = F::from(0.0);
+        let zero = F::from_f32(0.0);
         if denom.lower == zero {
             Bounds::from_pair(self.start.x.clone(), self.end.x.clone())
         } else {
             let t = (Bounds::single(y.clone()) - Bounds::single(self.start.y.clone()))
                 .max(zero.clone())
                 / denom;
-            let t = t.clamp(zero.clone(), F::from(1.0));
+            let t = t.clamp(zero.clone(), F::from_f32(1.0));
             crate::num::convex(&self.start.x, &self.end.x, &t)
         }
     }
@@ -155,12 +155,12 @@ impl<F: Float> Segment<F> {
         let dx0 = other.at_y_bound(&y0) - self.at_y_bound(&y0);
         let dx1 = other.at_y_bound(&y1) - self.at_y_bound(&y1);
         let denom = dx0.clone() - dx1;
-        if denom.lower <= F::from(0.0) {
+        if denom.lower <= F::from_f32(0.0) {
             return None;
         }
 
         let t = dx0 / denom;
-        if t.ge(&F::from(0.0)) && t.le(&F::from(1.0)) {
+        if t.ge(&F::from_f32(0.0)) && t.le(&F::from_f32(1.0)) {
             Some(crate::num::convex(&y0, &y1, &t))
         } else {
             None

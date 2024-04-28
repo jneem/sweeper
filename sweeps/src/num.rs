@@ -20,7 +20,7 @@ pub trait Float:
     + Hash
     + 'static
 {
-    fn from(x: f32) -> Self;
+    fn from_f32(x: f32) -> Self;
 
     fn to_exact(&self) -> Rational;
 
@@ -34,7 +34,7 @@ pub trait Float:
 }
 
 impl Float for Rational {
-    fn from(x: f32) -> Self {
+    fn from_f32(x: f32) -> Self {
         Rational::try_from(x).unwrap()
     }
 
@@ -56,7 +56,7 @@ impl Float for Rational {
 }
 
 impl Float for NotNan<f32> {
-    fn from(x: f32) -> Self {
+    fn from_f32(x: f32) -> Self {
         NotNan::try_from(x).unwrap()
     }
 
@@ -78,7 +78,7 @@ impl Float for NotNan<f32> {
 }
 
 impl Float for NotNan<f64> {
-    fn from(x: f32) -> Self {
+    fn from_f32(x: f32) -> Self {
         NotNan::try_from(f64::from(x)).unwrap()
     }
 
@@ -175,7 +175,7 @@ impl<F: Float> std::ops::Div<Bounds<F>> for Bounds<F> {
     type Output = Bounds<F>;
 
     fn div(self, denom: Bounds<F>) -> Bounds<F> {
-        let zero = F::from(0.0);
+        let zero = F::from_f32(0.0);
 
         if denom.lower <= zero && denom.upper >= zero {
             // Technically, when working with floats we could return the "full"

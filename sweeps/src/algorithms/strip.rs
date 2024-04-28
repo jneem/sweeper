@@ -15,6 +15,7 @@ use crate::{
 };
 
 /// This is where we accumulate the intermediate points for all the segments.
+/// (we aren't actually doing this yet)
 pub struct OutSegments<F: Float> {
     points: Vec<Vec<Point<F>>>,
 }
@@ -357,7 +358,10 @@ mod tests {
 
     use crate::{
         geom::Segment,
-        perturbation::{f64_perturbation, perturbation, realize_perturbation},
+        perturbation::{
+            f32_perturbation, f64_perturbation, perturbation, rational_perturbation,
+            realize_perturbation, FloatPerturbation, Perturbation,
+        },
     };
 
     use super::*;
@@ -479,9 +483,6 @@ mod tests {
             strip.check_new_seg(1, &s, &eps),
             InsertionResult::Perturbed(_, _)
         );
-
-        // TODO: check some known-difficult cases (thin strips, coincident points, etc)
-        // TODO: involve proptest
     }
 
     #[test]
@@ -492,8 +493,8 @@ mod tests {
         assert_eq!(3, strips.len());
     }
 
-    fn p(x: f64, y: f64) -> Point<NotNan<f64>> {
-        Point::new(x.try_into().unwrap(), y.try_into().unwrap())
+    fn p<F: Float>(x: f32, y: f32) -> Point<F> {
+        Point::new(F::from_f32(x), F::from_f32(y))
     }
 
     fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
@@ -502,9 +503,7 @@ mod tests {
             .chain(xs.last().zip(xs.first()))
     }
 
-    proptest! {
-    #[test]
-    fn perturbation_test(perturbations in prop::collection::vec(perturbation(f64_perturbation(0.1)), 1..5)) {
+    fn run_perturbation<P: FloatPerturbation>(ps: Vec<Perturbation<P>>) {
         let base = vec![vec![
             p(0.0, 0.0),
             p(1.0, 1.0),
@@ -514,7 +513,7 @@ mod tests {
             p(1.0, -1.0),
         ]];
 
-        let perturbed_polylines = perturbations
+        let perturbed_polylines = ps
             .iter()
             .map(|p| realize_perturbation(&base, p))
             .collect::<Vec<_>>();
@@ -532,11 +531,27 @@ mod tests {
             contour_next: vec![],
         };
 
-        let eps = NotNan::new(0.1).unwrap();
+        let eps = P::Float::from_f32(0.1);
         let strips = sweep(&segs, &eps);
         for strip in &strips {
             strip.check_invariants(&segs);
         }
+    }
+
+    proptest! {
+    #[test]
+    fn perturbation_test_f64(perturbations in prop::collection::vec(perturbation(f64_perturbation(0.1)), 1..5)) {
+        run_perturbation(perturbations);
+    }
+
+    #[test]
+    fn perturbation_test_f32(perturbations in prop::collection::vec(perturbation(f32_perturbation(0.1)), 1..5)) {
+        run_perturbation(perturbations);
+    }
+
+    #[test]
+    fn perturbation_test_rational(perturbations in prop::collection::vec(perturbation(rational_perturbation(0.1.try_into().unwrap())), 1..5)) {
+        run_perturbation(perturbations);
     }
     }
 }

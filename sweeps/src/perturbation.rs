@@ -1,3 +1,4 @@
+use malachite::{num::conversion::traits::RoundingFrom, rounding_modes::RoundingMode, Rational};
 use ordered_float::NotNan;
 use proptest::{arbitrary::any, prop_oneof, strategy::Strategy};
 
@@ -9,6 +10,20 @@ pub enum F64Perturbation {
     Ulp(i8),
     /// Perturb by a bounded additive amount.
     Eps(f64),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum F32Perturbation {
+    /// Perturb by between -128 and 127 ulps.
+    Ulp(i8),
+    /// Perturb by a bounded additive amount.
+    Eps(f32),
+}
+
+#[derive(Clone, Debug)]
+pub struct RationalPerturbation {
+    /// Perturb by an additive amount.
+    eps: Rational,
 }
 
 // The Debug bound is because some of the proptest strategy builders want it. Having it here is
@@ -31,7 +46,7 @@ impl FloatPerturbation for F64Perturbation {
                     std::num::FpCategory::Nan => unreachable!(),
                     std::num::FpCategory::Infinite => *f,
                     std::num::FpCategory::Zero => {
-                        let mut bits = n.unsigned_abs() as u64;
+                        let mut bits = n.unsigned_abs().into();
                         if *n < 0 {
                             bits |= sign_bit;
                         }
@@ -40,9 +55,9 @@ impl FloatPerturbation for F64Perturbation {
                     std::num::FpCategory::Subnormal => {
                         let bits = f.abs().to_bits();
                         let bits = if same_sign {
-                            bits + n.unsigned_abs() as u64
+                            bits + u64::from(n.unsigned_abs())
                         } else {
-                            bits.abs_diff(n.unsigned_abs() as u64)
+                            bits.abs_diff(u64::from(n.unsigned_abs()))
                         };
                         NotNan::new(f.signum() * f64::from_bits(bits)).unwrap()
                     }
@@ -66,6 +81,65 @@ impl FloatPerturbation for F64Perturbation {
             }
             F64Perturbation::Eps(x) => f + x,
         }
+    }
+}
+
+// Can we do better than copy-pasting the f64 version?
+impl FloatPerturbation for F32Perturbation {
+    type Float = NotNan<f32>;
+
+    fn apply(&self, f: &NotNan<f32>) -> NotNan<f32> {
+        match self {
+            F32Perturbation::Ulp(n) => {
+                let same_sign = (*n > 0) == (f.into_inner() > 0.0);
+                let sign_bit = 1 << 31;
+                match f.classify() {
+                    std::num::FpCategory::Nan => unreachable!(),
+                    std::num::FpCategory::Infinite => *f,
+                    std::num::FpCategory::Zero => {
+                        let mut bits = n.unsigned_abs().into();
+                        if *n < 0 {
+                            bits |= sign_bit;
+                        }
+                        NotNan::new(f32::from_bits(bits)).unwrap()
+                    }
+                    std::num::FpCategory::Subnormal => {
+                        let bits = f.abs().to_bits();
+                        let bits = if same_sign {
+                            bits + u32::from(n.unsigned_abs())
+                        } else {
+                            bits.abs_diff(u32::from(n.unsigned_abs()))
+                        };
+                        NotNan::new(f.signum() * f32::from_bits(bits)).unwrap()
+                    }
+                    std::num::FpCategory::Normal => {
+                        let delta = if same_sign {
+                            (*n as i32).abs()
+                        } else {
+                            -(*n as i32).abs()
+                        };
+                        // Taking the absolute value sets the sign bit to zero, so the
+                        // addition should never overflow.
+                        let bits = f.abs().to_bits().checked_add_signed(delta).unwrap();
+                        let x = if bits & sign_bit != 0 {
+                            f32::INFINITY
+                        } else {
+                            f32::from_bits(bits)
+                        };
+                        NotNan::new(f.signum() * x).unwrap()
+                    }
+                }
+            }
+            F32Perturbation::Eps(x) => f + x,
+        }
+    }
+}
+
+impl FloatPerturbation for RationalPerturbation {
+    type Float = Rational;
+
+    fn apply(&self, f: &Rational) -> Rational {
+        f.clone() + &self.eps
     }
 }
 
@@ -113,6 +187,21 @@ pub fn f64_perturbation(eps: f64) -> impl Strategy<Value = F64Perturbation> + Cl
     ]
 }
 
+pub fn f32_perturbation(eps: f32) -> impl Strategy<Value = F32Perturbation> + Clone {
+    prop_oneof![
+        any::<i8>().prop_map(F32Perturbation::Ulp),
+        (-eps..=eps).prop_map(F32Perturbation::Eps)
+    ]
+}
+
+pub fn rational_perturbation(eps: Rational) -> impl Strategy<Value = RationalPerturbation> + Clone {
+    // Neither malachite nor proptest implements ranges for rationals, so we convert to float and then convert back.
+    let eps: f64 = RoundingFrom::rounding_from(&eps, RoundingMode::Nearest).0;
+    (-eps..=eps).prop_map(|x| RationalPerturbation {
+        eps: x.try_into().unwrap(),
+    })
+}
+
 pub fn point_perturbation<P: FloatPerturbation>(
     fp: impl Strategy<Value = P> + Clone,
 ) -> impl Strategy<Value = PointPerturbation<P>> {
@@ -139,7 +228,7 @@ pub fn perturbation<P: FloatPerturbation + 'static>(
                 }),
             (0.0f32..1.0, any::<usize>(), inner.clone()).prop_map(|(t, idx, next)| {
                 Perturbation::Subdivision {
-                    t: Float::from(t),
+                    t: Float::from_f32(t),
                     idx,
                     next: Box::new(next),
                 }
