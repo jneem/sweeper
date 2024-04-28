@@ -53,11 +53,17 @@ impl<F: Float> EventQueue<F> {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct StripSeg<F: Float> {
-    idx: SegIdx,
-    x0: F,
-    x1: F,
+    pub idx: SegIdx,
+    pub x0: F,
+    pub x1: F,
+}
+
+impl<F: Float> std::fmt::Debug for StripSeg<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}, {:.3?} -- {:.3?}", self.idx, self.x0, self.x1)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -164,14 +170,21 @@ impl<F: Float> PreStrip<F> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Strip<F: Float> {
     /// Start height of this strip.
-    y0: F,
+    pub y0: F,
     /// End height of this strip. Guaranteed to be strictly bigger than `y0`.
-    y1: F,
+    pub y1: F,
 
-    segs: Vec<StripSeg<F>>,
+    pub segs: Vec<StripSeg<F>>,
+}
+
+impl<F: Float> std::fmt::Debug for Strip<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Strip {:?} -- {:?}", self.y0, self.y1)?;
+        f.debug_list().entries(self.segs.iter()).finish()
+    }
 }
 
 fn assert_sorted<'a, F: Float, I: Iterator<Item = &'a F>>(mut iter: I) {
@@ -342,10 +355,7 @@ mod tests {
     use ordered_float::NotNan;
     use proptest::prelude::*;
 
-    use crate::{
-        geom::Segment,
-        perturbation::{realize_perturbation, FloatPerturbation, Perturbation, PointPerturbation},
-    };
+    use crate::{geom::Segment, perturbation::realize_perturbation};
 
     use super::*;
 
@@ -487,67 +497,6 @@ mod tests {
         xs.windows(2)
             .map(|pair| (&pair[0], &pair[1]))
             .chain(xs.last().zip(xs.first()))
-    }
-
-    #[test]
-    fn failing() {
-        use FloatPerturbation::*;
-        use Perturbation::*;
-        let perturbations = [
-            Subdivision {
-                t: 0.7207724457360821,
-                idx: 329077434078203625,
-                next: Box::new(Base { idx: 0 }),
-            },
-            Point {
-                perturbation: PointPerturbation {
-                    x: Eps(-0.08580183224547851),
-                    y: Eps(0.04399391563513059),
-                },
-                idx: 3698181003372502639,
-                next: Box::new(Base { idx: 0 }),
-            },
-            Point {
-                perturbation: PointPerturbation {
-                    x: Eps(0.04566503440641999),
-                    y: Ulp(0),
-                },
-                idx: 2994486720789436495,
-                next: Box::new(Base { idx: 0 }),
-            },
-        ];
-        let base = vec![vec![
-            p(0.0, 0.0),
-            p(1.0, 1.0),
-            p(1.0, -1.0),
-            p(2.0, 0.0),
-            p(1.0, 1.0),
-            p(1.0, -1.0),
-        ]];
-
-        let perturbed_polylines = perturbations
-            .iter()
-            .map(|p| realize_perturbation(&base, p))
-            .collect::<Vec<_>>();
-        let segs = Segments {
-            segs: perturbed_polylines
-                .iter()
-                .flat_map(|poly| {
-                    cyclic_pairs(poly).map(|(p0, p1)| Segment {
-                        start: p0.min(p1).clone(),
-                        end: p0.max(p1).clone(),
-                    })
-                })
-                .collect(),
-            contour_prev: vec![],
-            contour_next: vec![],
-        };
-
-        let eps = NotNan::new(0.1).unwrap();
-        let strips = sweep(&segs, &eps);
-        for strip in &strips {
-            strip.check_invariants(&segs);
-        }
     }
 
     proptest! {

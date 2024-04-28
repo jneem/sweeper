@@ -58,6 +58,7 @@ impl<F: Float> std::fmt::Debug for SweepEvent<F> {
     }
 }
 
+#[derive(Debug, Default, Clone)]
 pub struct Segments<F: Float> {
     // TODO: make fields private; provide accessors and constructors
     pub segs: Vec<Segment<F>>,

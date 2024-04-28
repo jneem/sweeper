@@ -27,13 +27,27 @@
       in
       with pkgs;
       {
-        devShells.default = mkShell {
+        devShells.default = mkShell rec {
           buildInputs = [
             cargo-outdated
-            rust-toolchain
+            libclang
+            libxkbcommon
             typst
             typst-lsp
+            vulkan-loader
+            wayland
+            wayland-protocols
+            xorg.libxcb
           ];
+
+          nativeBuildInputs = [
+            rust-toolchain
+            pkgs.rustPlatform.bindgenHook
+            wayland-scanner
+          ];
+
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
         };
       }
     );
