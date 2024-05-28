@@ -6,12 +6,12 @@
 // for the event in the queue that has a strictly bigger y coordinate, and we
 // try to construct the next strip.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::{
     geom::Point,
     num::Float,
-    sweep::{SegIdx, Segments, SweepEvent},
+    sweep::{SegIdx, Segments, SweepEvent, SweepLine, SweepLineEntry, SweepLineSeg},
 };
 
 /// This is where we accumulate the intermediate points for all the segments.
@@ -95,6 +95,8 @@ impl<F: Float> PreStrip<F> {
         // newly entered determine their own x coordinate.
         let mut active: HashMap<_, _> = prev.segs.iter().map(|s| (s.idx, s.x1.clone())).collect();
 
+        // Process all the events in this strip. Note that horizontal segments will enter and
+        // then exit, so they won't be in the active list after this.
         for ev in evs {
             match ev.kind {
                 crate::sweep::SweepEventKind::Enter(idx) => {
@@ -160,7 +162,7 @@ impl<F: Float> PreStrip<F> {
 
             let (idx, seg) = match strip.check_new_seg(idx, seg, eps) {
                 InsertionResult::Exact => (idx, seg.clone()),
-                InsertionResult::Perturbed(new_idx, new_seg) => (new_idx, new_seg), // TODO: insert a new point into the output segment?
+                InsertionResult::Perturbed(new_idx, new_seg) => (new_idx, new_seg),
                 InsertionResult::Intersected(y, other) => {
                     return Err(SweepEvent::intersection(seg.idx, other.idx, y))
                 }
@@ -310,6 +312,45 @@ impl<F: Float> Strip<F> {
         assert_sorted(self.segs.iter().map(|i| &i.x0));
         assert_sorted(self.segs.iter().map(|i| &i.x1));
     }
+
+    // We have a sweep-line that was initialized from the end of a previous strip; add
+    // the beginning of this strip to the sweep-line.
+    fn add_start_to_sweep_line(&self, sweep: &mut SweepLine<F>) {
+        assert_eq!(self.y0, sweep.y);
+
+        for seg in &self.segs {
+            // If this segment is already present in the sweep-line, it was in the last
+            // strip.
+            match sweep.segs.iter().position(|entry| entry.idx == seg.idx) {
+                Some(pos) => {
+                    let SweepLineSeg::Single(prev) = sweep.segs[pos].x.clone() else {
+                        panic!("they already had two!");
+                    };
+                    if seg.x0 != prev {
+                        sweep.segs[pos].x = SweepLineSeg::EnterExit(prev, seg.x0.clone());
+                    }
+                }
+                None => sweep.segs.push(SweepLineEntry {
+                    idx: seg.idx,
+                    x: SweepLineSeg::Single(seg.x0.clone()),
+                }),
+            }
+        }
+    }
+
+    fn sweep_line_at_end(&self) -> SweepLine<F> {
+        SweepLine {
+            y: self.y1.clone(),
+            segs: self
+                .segs
+                .iter()
+                .map(|seg| SweepLineEntry {
+                    idx: seg.idx,
+                    x: SweepLineSeg::Single(seg.x1.clone()),
+                })
+                .collect(),
+        }
+    }
 }
 
 pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<Strip<F>> {
@@ -350,6 +391,99 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<Strip<F>> {
     strips
 }
 
+// The strip algorithm completely ignores horizontal segments, so we need to handle them
+// separately. Here we extract all the horizontal segments, grouped by y-coordinate.
+fn horizontal_segments<F: Float>(segments: &Segments<F>) -> BTreeMap<F, Vec<SegIdx>> {
+    let mut ret: BTreeMap<F, Vec<_>> = BTreeMap::new();
+    for idx in segments.indices() {
+        let seg = segments.get(idx);
+        if seg.start.y == seg.end.y {
+            ret.entry(seg.start.y.clone()).or_default().push(idx);
+        }
+    }
+    ret
+}
+
+pub fn strips_to_sweeps<F: Float>(
+    strips: &[Strip<F>],
+    segments: &Segments<F>,
+) -> Vec<SweepLine<F>> {
+    let Some(first_strip) = strips.first() else {
+        return Vec::new();
+    };
+    let horiz = horizontal_segments(segments);
+
+    let mut line = SweepLine {
+        y: first_strip.y0.clone(),
+        segs: Vec::new(),
+    };
+    let mut ret = Vec::new();
+
+    for strip in strips {
+        strip.add_start_to_sweep_line(&mut line);
+
+        // Add purely horizontal segments.
+        if let Some(h) = horiz.get(&line.y) {
+            for &idx in h {
+                let seg = segments.get(idx);
+
+                // A purely horizontal segment doesn't exactly "enter" and "exit" the sweep-line,
+                // but nevertheless it's convenient to treat the smaller coordinate as the entry
+                // and the larger coordinate as the exit. This way, every segment satisfies that
+                // the sweep-line entry precedes the sweep-line exit in contour order if and only
+                // if the segment is positively oriented (in the sense of `Segments`).
+                let enter = (&seg.start.x).min(&seg.end.x).clone();
+                let exit = (&seg.start.x).max(&seg.end.x).clone();
+                line.segs.push(SweepLineEntry {
+                    idx,
+                    x: SweepLineSeg::EnterExit(enter, exit),
+                });
+            }
+        }
+
+        // What should we do when the endpoint of a segment got perturbed?
+        // We could add a horizontal segment from the original endpoint to
+        // the new one. Currently, we only do this if it's topologically
+        // necessary (because the segment is connected to another one).
+        for entry_idx in 0..line.segs.len() {
+            let entry = &line.segs[entry_idx];
+            let seg_start = segments.oriented_start(entry.idx);
+            if seg_start.y == line.y {
+                if let Some(prev_idx) = segments.contour_prev[entry.idx.0] {
+                    // unwrap: we started (in the contour sense, not the sweep-line sense) at this sweep-line;
+                    // therefore the segment before us in the contour also participates in this sweep-line.
+                    let other_end = line
+                        .segs
+                        .iter()
+                        .find(|entry| entry.idx == prev_idx)
+                        .expect("contour neighbor")
+                        .x
+                        .enter(!segments.orientation[prev_idx.0])
+                        .clone();
+
+                    // Should the extra `x` coordinate count as the "entrance" or the "exit"?
+                    // It depends on the orientation of the segment it's attached to. (Draw
+                    // a picture and you'll see.)
+                    let entrance = segments.orientation[entry.idx.0];
+                    use SweepLineSeg::*;
+                    line.segs[entry_idx].x = match (entry.x.clone(), entrance) {
+                        (Single(x), true) => EnterExit(other_end, x),
+                        (Single(x), false) => EnterExit(x, other_end),
+                        (EnterExit(_, x), true) => EnterExit(other_end, x),
+                        (EnterExit(x, _), false) => EnterExit(x, other_end),
+                    };
+                }
+            }
+        }
+
+        ret.push(line);
+        line = strip.sweep_line_at_end();
+    }
+
+    ret.push(line);
+    ret
+}
+
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
@@ -385,6 +519,7 @@ mod tests {
             segs,
             contour_prev: vec![],
             contour_next: vec![],
+            orientation: vec![],
         };
 
         let strip_segs: Vec<_> = segs
@@ -529,6 +664,7 @@ mod tests {
                 .collect(),
             contour_prev: vec![],
             contour_next: vec![],
+            orientation: vec![],
         };
 
         let eps = P::Float::from_f32(0.1);
