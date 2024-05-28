@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use ordered_float::NotNan;
 use sweeps::{
-    algorithms::strip::{sweep, Strip},
-    geom::{Point, Segment},
-    sweep::Segments,
+    algorithms::strip::{strips_to_sweeps, sweep, Strip},
+    sweep::{Segments, SweepLine},
 };
 use taffy::style::AlignItems;
 use xilem::{
@@ -27,6 +26,7 @@ struct AppData {
 struct SweepState {
     segs: Segments<F>,
     strips: Vec<Strip<F>>,
+    sweeps: Vec<SweepLine<F>>,
 }
 
 fn app_logic(data: &mut AppData) -> impl View<AppData> {
@@ -44,40 +44,26 @@ fn app_logic(data: &mut AppData) -> impl View<AppData> {
     })
 }
 
-fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
-    xs.windows(2)
-        .map(|pair| (&pair[0], &pair[1]))
-        .chain(xs.last().zip(xs.first()))
-}
-
 fn main() {
-    let segs = Segments {
-        segs: cyclic_pairs(&[
-            (0.5, -1.0),
-            (0.0, 0.0),
-            (2.0, 0.3),
-            (0.0, 1.0),
-            (1.0, 1.2),
-            (1.5, 0.1),
-        ])
-        .map(|(p, q)| {
-            let p = Point::<F>::new(p.0.try_into().unwrap(), p.1.try_into().unwrap());
-            let q = Point::<F>::new(q.0.try_into().unwrap(), q.1.try_into().unwrap());
-            Segment {
-                start: p.clone().min(q.clone()),
-                end: p.max(q),
-            }
-        })
-        .collect(),
-        contour_prev: vec![],
-        contour_next: vec![],
-    };
+    let segs = Segments::from_closed_cycle([
+        (0.5, -1.0),
+        (0.0, 0.0),
+        (2.0, 0.3),
+        (0.0, 1.0),
+        (1.0, 1.2),
+        (1.5, 0.1),
+    ]);
     let eps = NotNan::try_from(0.1).unwrap();
     let strips = sweep(&segs, &eps);
-    dbg!(&segs, &strips);
+    let sweeps = strips_to_sweeps(&strips, &segs);
+    dbg!(&segs, &strips, &sweeps);
     let data = AppData {
         eps,
-        sweep: Arc::new(SweepState { segs, strips }),
+        sweep: Arc::new(SweepState {
+            segs,
+            strips,
+            sweeps,
+        }),
     };
 
     let app = App::new(data, app_logic);

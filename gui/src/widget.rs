@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use ordered_float::NotNan;
-use sweeps::algorithms::strip::{Strip, StripSeg};
+use sweeps::{
+    algorithms::strip::{Strip, StripSeg},
+    sweep::{SweepLine, SweepLineSeg},
+};
 use xilem::{
     parley::{self, FontContext, Layout},
     text::render_text,
@@ -53,7 +56,7 @@ impl Sweep {
     }
 
     fn draw_point(&self, scene: &mut xilem::vello::Scene, p: Point) {
-        let circle = Circle::new(p, 0.1);
+        let circle = Circle::new(p, 0.06);
         scene.fill(
             Fill::NonZero,
             self.transform,
@@ -95,6 +98,36 @@ impl Sweep {
                 None,
                 &Line::new(p0, p1),
             );
+        }
+    }
+
+    fn draw_sweep_location(&self, scene: &mut xilem::vello::Scene, y: F, bbox: Rect) {
+        let y = y.into_inner();
+        let color = Color::DIM_GRAY;
+        scene.stroke(
+            &Stroke::new(0.01).with_dashes(0.0, [0.01, 0.02]),
+            self.transform,
+            color,
+            None,
+            &Line::new((bbox.x0, y), (bbox.x1, y)),
+        );
+    }
+
+    fn draw_sweep(&self, scene: &mut xilem::vello::Scene, sweep: &SweepLine<F>) {
+        for entry in &sweep.segs {
+            if let SweepLineSeg::EnterExit(x0, x1) = entry.x {
+                let p0 = Point::new(x0.into_inner(), sweep.y.into_inner());
+                let p1 = Point::new(x1.into_inner(), sweep.y.into_inner());
+
+                let color = Color::BLACK;
+                scene.stroke(
+                    &Stroke::new(0.025),
+                    self.transform,
+                    color,
+                    None,
+                    &Line::new(p0, p1),
+                );
+            }
         }
     }
 
@@ -169,8 +202,14 @@ impl Widget for Sweep {
                 .then_scale(scale)
                 .then_translate(center.to_vec2());
             self.transform = transform;
+            for sweep in &self.state.sweeps {
+                self.draw_sweep_location(scene, sweep.y, bbox)
+            }
             for strip in &self.state.strips {
                 self.draw_strip(scene, strip);
+            }
+            for sweep in &self.state.sweeps {
+                self.draw_sweep(scene, sweep)
             }
         }
 

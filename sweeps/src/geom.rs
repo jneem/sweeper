@@ -1,4 +1,5 @@
 use malachite::Rational;
+use ordered_float::NotNan;
 
 use crate::num::{Bounds, Float};
 
@@ -33,6 +34,21 @@ impl<F: Float> Point<F> {
         Point {
             x: (one.clone() - t) * &self.x + t.clone() * &other.x,
             y: (one - t) * &self.y + t.clone() * &other.y,
+        }
+    }
+}
+
+impl<F: Float> From<(F, F)> for Point<F> {
+    fn from((x, y): (F, F)) -> Self {
+        Self { x, y }
+    }
+}
+
+impl From<(f64, f64)> for Point<NotNan<f64>> {
+    fn from((x, y): (f64, f64)) -> Self {
+        Self {
+            x: x.try_into().unwrap(),
+            y: y.try_into().unwrap(),
         }
     }
 }

@@ -61,7 +61,7 @@ impl<F: Float> std::fmt::Debug for SweepEvent<F> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Segments<F: Float> {
     // TODO: make fields private; provide accessors and constructors
     pub segs: Vec<Segment<F>>,
@@ -69,6 +69,17 @@ pub struct Segments<F: Float> {
     pub contour_prev: Vec<Option<SegIdx>>,
     pub contour_next: Vec<Option<SegIdx>>,
     pub orientation: Vec<bool>,
+}
+
+impl<F: Float> Default for Segments<F> {
+    fn default() -> Self {
+        Self {
+            segs: Default::default(),
+            contour_prev: Default::default(),
+            contour_next: Default::default(),
+            orientation: Default::default(),
+        }
+    }
 }
 
 impl<F: Float> Segments<F> {
@@ -86,6 +97,31 @@ impl<F: Float> Segments<F> {
         } else {
             &self.get(idx).end
         }
+    }
+
+    pub fn from_closed_cycle<P: Into<Point<F>>>(ps: impl IntoIterator<Item = P>) -> Self {
+        fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
+            xs.windows(2)
+                .map(|pair| (&pair[0], &pair[1]))
+                .chain(xs.last().zip(xs.first()))
+        }
+
+        let ps: Vec<_> = ps.into_iter().map(|p| p.into()).collect();
+        let mut ret = Self::default();
+        for (p, q) in cyclic_pairs(&ps) {
+            let (a, b, orient) = if p < q { (p, q, true) } else { (q, p, false) };
+            ret.segs.push(Segment {
+                start: a.clone(),
+                end: b.clone(),
+            });
+            ret.orientation.push(orient);
+            ret.contour_prev
+                .push(Some(SegIdx(ret.segs.len().saturating_sub(2))));
+            ret.contour_next.push(Some(SegIdx(ret.segs.len())));
+        }
+        ret.contour_prev[0] = Some(SegIdx(ret.segs.len() - 1));
+        *ret.contour_next.last_mut().unwrap() = Some(SegIdx(0));
+        ret
     }
 }
 
