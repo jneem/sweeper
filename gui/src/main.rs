@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
+use masonry::widget::MainAxisAlignment;
 use ordered_float::NotNan;
 use sweeps::{
     algorithms::strip::{strips_to_sweeps, sweep, Strip},
     sweep::{Segments, SweepLine},
 };
-use taffy::style::AlignItems;
 use xilem::{
-    vello::peniko::Color,
-    view::{button, div, flex_column, flex_row, grid, Adapt, View},
-    App, AppLauncher,
+    view::{button, flex, label},
+    Axis, Color, EventLoop, WidgetView, Xilem,
 };
 
 mod view;
@@ -29,19 +28,16 @@ struct SweepState {
     sweeps: Vec<SweepLine<F>>,
 }
 
-fn app_logic(data: &mut AppData) -> impl View<AppData> {
+fn app_logic(data: &mut AppData) -> impl WidgetView<AppData> {
     let sweep = view::Sweep {
         state: Arc::clone(&data.sweep),
     };
-    flex_row((
-        flex_column(div("Placeholder")),
-        grid(Some(sweep))
-            .with_background_color(Color::WHITE)
-            .with_style(|s| s.flex_grow = 1.0),
-    ))
-    .with_style(|s| {
-        s.align_items = Some(AlignItems::Stretch);
-    })
+    // TODO: there doesn't seem to currently be a way to stretch children on the main axis?
+    // flex((flex(label("Placeholder")).direction(Axis::Vertical), sweep))
+    //     .main_axis_alignment(MainAxisAlignment::Start)
+    //     .cross_axis_alignment(masonry::widget::CrossAxisAlignment::Fill)
+    //     .direction(Axis::Horizontal)
+    sweep
 }
 
 fn main() {
@@ -66,6 +62,7 @@ fn main() {
         }),
     };
 
-    let app = App::new(data, app_logic);
-    AppLauncher::new(app).run();
+    let app = Xilem::new(data, app_logic);
+    app.run_windowed(EventLoop::with_user_event(), "Sweeper".into())
+        .unwrap();
 }

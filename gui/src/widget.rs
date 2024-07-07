@@ -1,18 +1,26 @@
 use std::sync::Arc;
 
-use ordered_float::NotNan;
-use sweeps::{
-    algorithms::strip::{Strip, StripSeg},
-    sweep::{SweepLine, SweepLineSeg},
-};
-use xilem::{
-    parley::{self, FontContext, Layout},
-    text::render_text,
+use accesskit::Role;
+use masonry::{
+    kurbo::ParamCurveNearest,
+    parley::{self, FontContext, Layout, LayoutContext},
+    text2::{TextBrush, TextLayout},
     vello::{
         kurbo::{Affine, Circle, Line, Point, Rect, Stroke},
         peniko::{Brush, Color, Fill},
     },
-    widget::{LifeCycle, Widget},
+    widget::WidgetRef,
+    StatusChange,
+};
+use masonry::{
+    vello::Scene, BoxConstraints, EventCtx, LayoutCtx, LifeCycle, LifeCycleCtx, PaintCtx,
+    PointerEvent, Size, Widget,
+};
+use ordered_float::NotNan;
+use smallvec::SmallVec;
+use sweeps::{
+    algorithms::strip::{Strip, StripSeg},
+    sweep::{SweepLine, SweepLineSeg},
 };
 
 use crate::{SweepState, F};
@@ -21,7 +29,7 @@ pub struct Sweep {
     pub state: Arc<SweepState>,
     hot_seg: Option<StripSeg<F>>,
     transform: Affine,
-    layout: Option<Layout<Brush>>,
+    layout: Option<TextLayout<String>>,
 }
 
 impl Sweep {
@@ -36,26 +44,32 @@ impl Sweep {
 
     pub fn seg_at(&self, p: Point) -> Option<StripSeg<F>> {
         let p = self.transform.inverse() * p;
-        if let Some(strip) = self.state.strips.iter().find(|s| s.y1.into_inner() >= p.y) {
-            let y0 = strip.y0.into_inner();
-            let y1 = strip.y1.into_inner();
-            let y_frac = (p.y - y0) / (y1 - y0);
 
-            let seg = strip.segs.iter().min_by_key(|s| {
-                let x0 = s.x0.into_inner();
-                let x1 = s.x1.into_inner();
-                let x = x0 + (x1 - x0) * y_frac;
-
-                NotNan::new((x - p.x).abs()).unwrap()
-            });
+        if let Some((_line, seg)) = self
+            .state
+            .strips
+            .iter()
+            .flat_map(|strip| {
+                strip.segs.iter().map(|seg| {
+                    (
+                        Line::new(
+                            (seg.x0.into_inner(), strip.y0.into_inner()),
+                            (seg.x1.into_inner(), strip.y1.into_inner()),
+                        ),
+                        seg,
+                    )
+                })
+            })
+            .min_by_key(|(line, _seg)| NotNan::new(line.nearest(p, 0.0).distance_sq).unwrap())
+        {
             // TODO: put a threshold -- make sure it's actually close
-            seg.cloned()
+            Some(seg.clone())
         } else {
             None
         }
     }
 
-    fn draw_point(&self, scene: &mut xilem::vello::Scene, p: Point) {
+    fn draw_point(&self, scene: &mut Scene, p: Point) {
         let circle = Circle::new(p, 0.06);
         scene.fill(
             Fill::NonZero,
@@ -73,7 +87,7 @@ impl Sweep {
         );
     }
 
-    fn draw_strip(&self, scene: &mut xilem::vello::Scene, strip: &Strip<F>) {
+    fn draw_strip(&self, scene: &mut Scene, strip: &Strip<F>) {
         let y0 = strip.y0.into_inner();
         let y1 = strip.y1.into_inner();
         for seg in &strip.segs {
@@ -101,7 +115,7 @@ impl Sweep {
         }
     }
 
-    fn draw_sweep_location(&self, scene: &mut xilem::vello::Scene, y: F, bbox: Rect) {
+    fn draw_sweep_location(&self, scene: &mut Scene, y: F, bbox: Rect) {
         let y = y.into_inner();
         let color = Color::DIM_GRAY;
         scene.stroke(
@@ -113,7 +127,7 @@ impl Sweep {
         );
     }
 
-    fn draw_sweep(&self, scene: &mut xilem::vello::Scene, sweep: &SweepLine<F>) {
+    fn draw_sweep(&self, scene: &mut Scene, sweep: &SweepLine<F>) {
         for entry in &sweep.segs {
             if let SweepLineSeg::EnterExit(x0, x1) = entry.x {
                 let p0 = Point::new(x0.into_inner(), sweep.y.into_inner());
@@ -131,63 +145,69 @@ impl Sweep {
         }
     }
 
-    fn compute_seg_layout(&mut self, fc: &mut FontContext) {
+    fn compute_seg_layout(&mut self, fc: &mut FontContext, lc: &mut LayoutContext<TextBrush>) {
         let Some(hot_seg) = self.hot_seg.as_ref() else {
             self.layout = None;
             return;
         };
 
-        let mut lcx = parley::LayoutContext::new();
         let text = format!(
             "seg {}, {:.3} -- {:.3}",
             hot_seg.idx.0, hot_seg.x0, hot_seg.x1
         );
-        let mut layout_builder = lcx.ranged_builder(fc, &text, 1.0);
-        layout_builder.push_default(&parley::style::StyleProperty::Brush(Brush::Solid(
-            Color::BLACK,
-        )));
-        layout_builder.push_default(&parley::style::StyleProperty::FontStack(
-            parley::style::FontStack::Source("system-ui"),
-        ));
-        let mut layout = layout_builder.build();
-        layout.break_all_lines(None, parley::layout::Alignment::Start);
+        let mut layout = TextLayout::new(text, 16.0);
+        layout.set_brush(Color::BLACK);
+        layout.rebuild(fc, lc);
         self.layout = Some(layout);
     }
 }
 
 impl Widget for Sweep {
-    fn event(&mut self, cx: &mut xilem::widget::EventCx, event: &xilem::widget::Event) {
-        if let xilem::widget::Event::MouseMove(ev) = event {
-            let hot_seg = self.seg_at(ev.pos);
+    fn on_pointer_event(&mut self, ctx: &mut EventCtx, event: &PointerEvent) {
+        if let PointerEvent::PointerMove(ev) = event {
+            let p = Point::new(ev.position.x, ev.position.y);
+            let hot_seg = self.seg_at(p);
             if hot_seg != self.hot_seg {
                 self.hot_seg = hot_seg;
-                cx.request_layout();
-                cx.request_paint();
+                ctx.request_layout();
+                ctx.request_paint();
             }
         }
         //dbg!(event);
     }
 
-    fn lifecycle(&mut self, cx: &mut xilem::widget::LifeCycleCx, event: &xilem::widget::LifeCycle) {
-        if matches!(event, LifeCycle::HotChanged(_)) {
-            cx.request_paint();
+    fn on_text_event(&mut self, _ctx: &mut EventCtx, _event: &masonry::TextEvent) {
+        // If focused on a link and enter pressed, follow it?
+        // TODO: This sure looks like each link needs its own widget, although I guess the challenge there is
+        // that the bounding boxes can go e.g. across line boundaries?
+    }
+
+    fn on_access_event(&mut self, _ctx: &mut EventCtx, _event: &masonry::AccessEvent) {}
+
+    fn on_status_change(&mut self, ctx: &mut LifeCycleCtx, event: &StatusChange) {
+        if matches!(event, StatusChange::HotChanged(_)) {
+            ctx.request_paint();
         }
     }
 
-    fn update(&mut self, _cx: &mut xilem::widget::UpdateCx) {}
+    fn lifecycle(&mut self, _ctx: &mut LifeCycleCtx, _event: &LifeCycle) {}
 
-    fn layout(
-        &mut self,
-        cx: &mut xilem::widget::LayoutCx,
-        bc: &xilem::widget::BoxConstraints,
-    ) -> xilem::vello::kurbo::Size {
-        self.compute_seg_layout(cx.font_cx());
-        bc.constrain((100.0, 100.0))
+    fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints) -> Size {
+        let (fc, lc) = ctx.text_contexts();
+        self.compute_seg_layout(fc, lc);
+        bc.constrain((500.0, 500.0))
     }
 
-    fn paint(&mut self, cx: &mut xilem::widget::PaintCx, scene: &mut xilem::vello::Scene) {
-        let size = cx.size();
+    fn paint(&mut self, ctx: &mut PaintCtx, scene: &mut Scene) {
+        let size = ctx.size();
         let center = (size.to_vec2() / 2.0).to_point();
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::WHITE,
+            None,
+            &size.to_rect(),
+        );
 
         let bbox = self
             .state
@@ -213,9 +233,19 @@ impl Widget for Sweep {
             }
         }
 
-        if let Some(layout) = self.layout.as_ref() {
-            render_text(scene, Affine::IDENTITY, layout);
+        if let Some(layout) = self.layout.as_mut() {
+            layout.draw(scene, Point::new(0.0, 0.0));
         }
+    }
+
+    fn accessibility_role(&self) -> Role {
+        Role::Canvas
+    }
+
+    fn accessibility(&mut self, ctx: &mut masonry::AccessCtx) {}
+
+    fn children(&self) -> SmallVec<[WidgetRef<'_, dyn Widget>; 16]> {
+        SmallVec::new()
     }
 }
 
