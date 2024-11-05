@@ -1,4 +1,5 @@
-#import "@preview/ctheorems:1.1.2": *
+#import "@preview/ctheorems:1.1.3": *
+#import "@preview/cetz:0.3.1"
 #set par(justify: true)
 
 #show: thmrules
@@ -24,29 +25,87 @@ We'll be talking about sweep line algorithms, where the sweep line is horizontal
 Therefore, every line segment "starts" at the coordinate with smaller $y$ and "ends" at the coordinate
 with larger $y$ (we'll assume for now that there are no horizontal segments). We'll parametrize each
 line segment as a function of $y$. So if $alpha: [y_0 (alpha), y_1 (alpha)] arrow bb(R)$ is a line segment
-then $alpha(y)$ is the $x$ coordinate at $y$-coordinate $y in [y_0 (alpha), y_1 (alpha)]$
+then $alpha(y)$ is the $x$ coordinate at $y$-coordinate $y in [y_0 (alpha), y_1 (alpha)]$.
+We write $theta_alpha$ for the angle that $alpha$ makes with the positive horizontal axis.
+Let's have a picture. (In the discussion, it won't matter whether positive $y$ points up or down, but in the
+pictures we'll adopt the graphics convention of having positive $y$ point down.)
 
-Define a relation $lt.curly_(y,epsilon)$ on line segments whose domain contains $y$, where
-$alpha lt.curly_(y,epsilon) beta$ if $alpha(y) + epsilon < beta(y)$.
-Despite our choice of symbol, this is not necessarily transitive.
+#cetz.canvas({
+  import cetz.draw: *
+
+  line((1, 3), (0, 0), name: "a")
+  line((-4, 3), (4, 3), stroke: (dash: "dotted"))
+  line((-4, 0), (4, 0), stroke: (dash: "dotted"))
+  content((-4, 3), $y_0(alpha)$, anchor: "east")
+  content((-4, 0), $y_1(alpha)$, anchor: "east")
+  content((0.6, 1.5), $alpha$, anchor: "west")
+
+  cetz.angle.angle("a.start", "a.end", (4, 3), label: $theta_alpha$, label-radius: 0.8)
+})
+
+We'll be dealing with inexact arithmetic, so let's define some "error bars" on our line segments.
+For an error parameter $epsilon > 0$, offsetting from $alpha$ by $plus.minus epsilon$ in the perpendicular-to-$alpha$ direction
+is the same as offsetting by $alpha plus.minus epsilon / (|cos theta_alpha|)$ in the horizontal direction.
+Roughly speaking, the "error bars" on $alpha$ amount to adding this horizontal error. But we'll be slightly
+more accurate around the corners, by truncating these error bars to the horizontal extends of $alpha$. Precisely, we define
+
+$
+alpha_(+,epsilon)(y) = min(alpha(y) + epsilon / (|cos theta_alpha|), max(alpha(y_0), alpha(y_1))) \
+alpha_(-,epsilon)(y) = max(alpha(y) - epsilon / (|cos theta_alpha|), min(alpha(y_0), alpha(y_1))) \
+$
+
+In pictures, the gray shaded region is the region between $alpha_(-,epsilon)$ and $alpha_(+,epsilon)$:
+
+#cetz.canvas({
+  import cetz.draw: *
+
+  line((0.5, 3), (0, 1.5), (0, 0), (0.5, 0), (1, 1.5), (1, 3), close: true, fill: gray, stroke: 0pt)
+  line((0.5, 3), (0, 1.5), (0, 0), stroke: ( dash: "dashed" ))
+  line((0.5, 0), (1, 1.5), (1, 3), stroke: ( dash: "dashed" ))
+
+  line((1, 3), (0, 0), name: "a")
+  line((-4, 3), (4, 3), stroke: (dash: "dotted"))
+  line((-4, 0), (4, 0), stroke: (dash: "dotted"))
+  content((-4, 3), $y_0(alpha)$, anchor: "east")
+  content((-4, 0), $y_1(alpha)$, anchor: "east")
+  content((0.6, 1.5), $alpha$, anchor: "west")
+
+  content((0.8, 0.5), $alpha_(+,epsilon)$, anchor: "west")
+  content((0.2, 2.4), $alpha_(-,epsilon)$, anchor: "east")
+})
+
+
+Define a relation $prec_(y,epsilon)$ on line segments whose domain contains $y$, where
+$alpha prec_(y,epsilon) beta$ if $alpha_(+,epsilon)(y) < beta_(-,epsilon)(y)$.
+Intuitively, $alpha prec_(y,epsilon) beta$ if $alpha$ is definitely to the left of $beta$
+at height $y$: $alpha$ is far enough to the left that their error bars don't overlap.
+Clearly, for a given $y$ and $epsilon$ there are three mutually exclusive possibilities: either
+$alpha prec_(y,epsilon) beta$ or $beta prec_(y,epsilon) alpha$ or neither of the two holds. We'll denote
+this third possibility by $alpha approx_(y,epsilon) beta$, and we write
+$alpha prec.tilde_(y,epsilon) beta$ for "$alpha prec_(y,epsilon) beta$ or $alpha approx_(y,epsilon) beta$."
+
+We'll say more about this later, but one of the main computational primitives we'll use is an algorithm
+that distinguishes 
+$alpha prec_(y,epsilon) beta$ from $beta prec_(y,epsilon) alpha$, but doesn't have
+any guarantees when $alpha approx_(y,epsilon) beta$.
 
 #def[
   Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$alpha$ and $beta$
   are $epsilon$-close from $y$ onwards* if
-  $ |alpha(z) - beta(z)| <= epsilon $
+  $alpha approx_(z,epsilon) beta$
   for all $y <= z <= min(y_1(alpha), y_1(beta))$.
 ] <close_from_y_onwards>
 
 #def[
   Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$(alpha, beta)$
-  $epsilon$-cross by $y$* if $y$ belongs to both domains and $alpha(y) > beta(y) + epsilon$.
+  $epsilon$-cross by $y$* if $y$ belongs to both domains and $alpha succ_(y,epsilon) beta$.
   We say that *$(alpha, beta)$ $epsilon$-cross* if they $epsilon$-cross by $min(y_1 (alpha), y_1 (beta))$.
 ]
 
 Note that the definition of $epsilon$-crossing is not symmetric: $(alpha, beta)$ $epsilon$-crossing is
 not the same as $(beta, alpha)$ $epsilon$-crossing. We will usually talk about $(alpha, beta)$ $epsilon$-crossing
-in the context that $alpha lt.curly_(y,epsilon) beta$, and in this context "$(alpha, beta)$ $epsilon$-cross" means
-that at some height $y'$ before the end of $alpha$ and $beta$, the inequality $alpha lt.curly_(y',epsilon) beta$ will fail.
+in the context that $alpha$ starts off to the left of $beta$, and in this context "$(alpha, beta)$ $epsilon$-cross" means
+that at some height before the end of $alpha$ and $beta$, $alpha$ has definitely crossed to the right of $beta$.
 
 == Partially ordered sweep-lines
 
@@ -56,16 +115,15 @@ track the horizontal order of the segments.
 
 #def[
 The ordered collection $(alpha^1, ..., alpha^m)$ of line segments is #emph[$epsilon$-ordered at $y$]
-if each $alpha^i$ has $y$ in its domain and $alpha^i lt.curly_(y,epsilon) alpha^j$ for all $1 <= i < j <= m$.
+if each $alpha^i$ has $y$ in its domain and $alpha^i prec.tilde_(y,epsilon) alpha^j$ for all $1 <= i < j <= m$.
 ]
 
-To be precise, our algorithm will produce a family of sweep-lines that are $epsilon$-ordered at every $y$
-(and also #emph[complete] in the sense that the sweep-line at $y$ will contain all line segments whose
+Our algorithm will produce a family of sweep-lines that are $epsilon$-ordered at every $y$
+(and also the sweep-lines will be #emph[complete] in the sense that the sweep-line at $y$ will contain all line segments whose
 domain contains $y$). This seems weaker than finding all the intersections (for example, because if you
 find all intersections you can use them to produce a completely ordered family of sweep-lines), but
-in fact they're more-or-less equivalent. One way to see this is to note that intersection points
-can be tracked (to within a horizontal $epsilon$) by checking when segments change order in the sweep-line.
-But also, I'm pretty sure this is true:
+in fact they're more-or-less equivalent.
+I haven't written the proof out carefully yet, but I'm pretty sure this is true:
 
 #lemma[
 If $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$ then there exist $x^1 <= ... <= x^m$ such that
@@ -78,8 +136,8 @@ approximate ordering is exact.
 One consequence of our approximate approach is that we need to do a little extra bookkeeping to maintain
 the continuity of the input paths: when one segment exits and its path-neighbor enters, we need to remember
 that they are connected because the approximate sweep-line might not keep them together. We'll ignore this
-bookkeeping for now, and we'll also gloss over the fact that a real implementation would do everything in
-one pass. (The goal here is to get into detail about the sweep-line invariants, and prove that we can maintain them.)
+bookkeeping for now;
+the goal here is to get into detail about the sweep-line invariants, and prove that we can maintain them.
 
 == The sweep-line invariants
 
@@ -136,7 +194,7 @@ We call the first case a "clear" intersection and the second case a "shuffle" in
 Rather than defining exactly the distinction between the two cases, let's list some properties that we
 would like to hold.
 
-Fix $y$ and suppose we have two segments $alpha^1$ and $alpha^2$ satisfying $alpha^1 lt.curly_(y,epsilon) alpha^2$.
+Fix $y$ and suppose we have two segments $alpha^1$ and $alpha^2$ satisfying $alpha^1 prec_(y,epsilon) alpha^2$.
 - If the segments $epsilon$-cross then they have a clear intersection or a shuffle intersection (or both).
 - If the segments clearly intersect, there is an algorithm that computes a lower bound $hat(y)$ on the exact intersection height,
   with the property that $alpha^1(hat(y)) >= alpha^2(hat(y)) - epsilon$.
@@ -148,7 +206,7 @@ them to be exactly horizontal. The reason we insist on a lower bound will become
 
 Now let's try to come up with definitions that satisfy our properties:
 #def[
-Suppose $alpha lt.curly_(y,epsilon) beta$.
+Suppose $alpha prec_(y,epsilon) beta$.
 We say that *$(alpha, beta)$ have a shuffle intersection at $y$* if $beta(y) < alpha(y)$ and $(alpha, beta)$ $epsilon$-cross.
 We say that *$(alpha, beta)$ have a clear intersection at $y$* if $(alpha, beta)$ $epsilon$-cross but do not have a shuffle intersection at $y$.
 ]
