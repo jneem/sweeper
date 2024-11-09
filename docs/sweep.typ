@@ -550,3 +550,67 @@ $(alpha^1, ..., alpha^n)$ satisfy the crossing invariant at $y$.
     the crossing invariant, there is an event between $j$ and $i$ with height at most $y^*$. This event is
     also between $j$ and $n$, and so it witnesses the crossing invariant for $j$ and $n$.
 ]
+
+=== Intersection scans, early intersection version
+
+TODO: this is a re-write of an earlier section, and should get merged there
+TODO: define a crossing that isn't an $epsilon$-crossing
+
+Fix $y$ and $epsilon$, and
+suppose we have a collection of lines $(alpha^i, ..., alpha^n)$ that satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^(i+1), ..., alpha^n)$
+satisfy the crossing invariant at $y$.
+To make the whole collection satisfy both invariants, we run the following algorithm.
+We call this an *intersection scan to the right*.
+
+#pseudocode-list[
+  + *for* $j = i+1$ up to $n$
+    + #line-label(<w-def>) let $w^j$ be the smallest height of any event between $i$ and $j$
+
+    + *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
+      + choose $z$ before the crossing, such that $alpha^i approx_(z,epsilon) alpha^j$
+      + insert an intersection event for $(alpha^i, alpha^j)$ at $z$
+
+    + #line-label(<protect>) *if* $alpha^i (z) <= alpha^j_-(z)$ for all $z in [y, w^j]$
+      + *break*
+]
+
+#inexact[
+The test at @protect can be seen as an early-stopping optimization, and is not necessary for correctness.
+In particular, if it is difficult to evaluate the test exactly then an approximation with no false positives
+is also fine.
+]
+
+#lemma[
+Suppose that $(alpha^i, ..., alpha^n)$ satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^(i+1), ..., alpha^n)$
+satisfy the crossing invariant at $y$.
+After running an intersection scan to the right,
+$(alpha^i, ..., alpha^n)$ satisfy the crossing invariant at $y$.
+
+In fact, $(alpha^i, ..., alpha^n)$ satisfy a slightly stronger crossing invariant at $y$: if for every $j > i$
+if $(alpha^i, alpha^j_(+,epsilon))$ cross then the event queue contains an event between $i$ and $j$, and before
+ the crossing height.
+]<lem-intersection-scan2>
+
+(The special thing about the stronger crossing invariant is that it asks whether
+$(alpha^i, alpha^j_(+,epsilon))$ cross, where the usual crossing invariant asks
+whether 
+$(alpha^i_(-,epsilon), alpha^j_(+,epsilon))$ cross.)
+
+#proof[
+  It suffices to check the stronger crossing invariant.
+  So take some $k > i$
+  that $(alpha^i, alpha^k_(+,epsilon))$ cross. We consider two cases: whether or not the loop terminated
+  before reaching $k$.
+
+  - Suppose the loop terminated at some $j < k$. If $(alpha^i, alpha^k_(+,epsilon))$ cross
+    after $w^j$, then the definition of $w^j$ ensures that there is an event between $i$ and $j$ (and therefore between
+    $i$ and $k$) before the crossing. On the other hand, the termination condition ensures that
+    $alpha^i (z) <= alpha^j_-(z)$ until $w^j$, and so if $(alpha^i, alpha^k_(+,epsilon))$ cross before $w^j$ then
+    also $(alpha^j, alpha^k)$ cross before that. In this case, the crossing invariant for $(alpha^(i+1), ..., alpha^n)$
+    implies the existence of an event between $j$ and $k$ (and therefore between $i$ and $k$) before the crossing.
+  - If the loop included the case $j = k$, we break into two more cases:
+    - If $(alpha^i, alpha^k_(+,epsilon))$ cross by $w^j$, then the algorithm inserted a witnessing event between $i$ and $j$.
+    - Otherwise, the definition of $w^j$ ensures that there is an event between $i$ and $j$ before the crossing.
+]
