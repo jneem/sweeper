@@ -1,5 +1,6 @@
 #import "@preview/ctheorems:1.1.3": *
 #import "@preview/cetz:0.3.1"
+#import "@preview/lovelace:0.3.0": *
 #set par(justify: true)
 
 #show: thmrules
@@ -19,6 +20,21 @@
       )
     )
   )
+}
+
+// TODO: figure out how to get rid of the ":" in the caption
+#let invariant(term) = {
+figure(
+  block(inset: 16pt,
+      text(
+        size: 10pt,
+        [#term]
+    )
+  ),
+  kind: "invariant",
+  supplement: "invariant",
+  caption: ""
+)
 }
 
 We'll be talking about sweep line algorithms, where the sweep line is horizontal and increasing in $y$.
@@ -84,10 +100,20 @@ $alpha prec_(y,epsilon) beta$ or $beta prec_(y,epsilon) alpha$ or neither of the
 this third possibility by $alpha approx_(y,epsilon) beta$, and we write
 $alpha prec.tilde_(y,epsilon) beta$ for "$alpha prec_(y,epsilon) beta$ or $alpha approx_(y,epsilon) beta$."
 
-We'll say more about this later, but one of the main computational primitives we'll use is an algorithm
-that distinguishes 
-$alpha prec_(y,epsilon) beta$ from $beta prec_(y,epsilon) alpha$, but doesn't have
-any guarantees when $alpha approx_(y,epsilon) beta$.
+Here are a few basic properties of our definitions:
+#lemma[
+1. For any $y$ and any $epsilon > 0$, $prec_(y,epsilon)$ is transitive:
+  if $alpha prec_(y,epsilon) beta$
+  and $beta prec_(y,epsilon) gamma$ then $alpha prec_(y,epsilon) gamma$. (However, $prec.tilde_(y,epsilon)$ is not transitive.)
+2. For any $y$ and any $epsilon > 0$,
+  if $alpha prec_(y,epsilon) beta$
+  and $beta prec.tilde_(y,epsilon) gamma$ then $alpha prec.tilde_(y,epsilon) gamma$.
+3. For any $y$ and any $epsilon > 0$,
+  if $alpha prec.tilde_(y,epsilon) beta$
+  and $beta prec_(y,epsilon) gamma$ then $alpha prec.tilde_(y,epsilon) gamma$.
+4. For any $y$, the relation $prec_(y,epsilon)$ is monotone in $epsilon$, in that if $alpha prec_(y,epsilon) beta$ then $alpha prec_(y,eta) beta$ for
+  any $eta in (0, epsilon)$.
+]
 
 #def[
   Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$alpha$ and $beta$
@@ -122,12 +148,16 @@ Our algorithm will produce a family of sweep-lines that are $epsilon$-ordered at
 (and also the sweep-lines will be #emph[complete] in the sense that the sweep-line at $y$ will contain all line segments whose
 domain contains $y$). This seems weaker than finding all the intersections (for example, because if you
 find all intersections you can use them to produce a completely ordered family of sweep-lines), but
-in fact they're more-or-less equivalent.
-I haven't written the proof out carefully yet, but I'm pretty sure this is true:
+in fact they're more-or-less equivalent: given weakly-ordered sweep-lines, you can perturb the lines so
+that your previously-weak order becomes a real order:
 
 #lemma[
 If $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$ then there exist $x^1 <= ... <= x^m$ such that
-$|alpha^i (y) - x^i| <= epsilon$ for all $i$.
+$alpha_(-,epsilon)^i (y) <= x^i <= alpha_(+,epsilon)^i(y)$ for all $i$.
+]
+
+#proof[
+Define $x^i = max_(j <= i) alpha_(+,epsilon)^j(y)$.
 ]
 
 So once we have our family of approximate sweep-lines, we can go back and perturb the lines so that our
@@ -144,8 +174,11 @@ the goal here is to get into detail about the sweep-line invariants, and prove t
 We're going to have a sweep-line that depends on $y$. When we need to emphasize this, we'll use the
 cumbersome but explicit notation
 $(alpha_y^1, ..., alpha_y^(m_y))$.
+In addition to the sweep-line, we'll maintain a queue of "events." The events are ordered by $y$-position
+and they are similar to the classical Bentley-Ottmann events so we'll skimp on the details here. There
+is an "enter" event, an "exit" event, and an "intersection" event.
 
-Our sweep-line will maintain three invariants:
+Our sweep-line will maintain two invariants:
 + At every $y$, the sweep-line is $epsilon$-ordered at $y$. (We'll call this the "order" invariant.)
 + For every $y$ and every $1 <= i < j <= m_y$, if $alpha_y^i$ and $alpha_y^j$ $epsilon$-cross
   then the event queue contains an event between $i$ and $j$,
@@ -185,31 +218,30 @@ to the next event:
 
 In vanilla Bentley-Ottmann, each segment gets compared to its two sweep-line neighbors; they can either intersect or not intersect.
 When numerical errors are taken into account, we may need to compare to
-more segments. Also there are more possible results from the comparison.
+more segments. TODO: draw an example with three segments.
 
-First of all, there are two kinds of intersections: a "normal" intersection where we can compute the
-`y` coordinate of the crossing and insert an intersection event into the queue; and another kind of intersection
-where the two lines definitely intersect somewhere, but they're too close to coincident to really figure out when.
-We call the first case a "clear" intersection and the second case a "shuffle" intersection.
-Rather than defining exactly the distinction between the two cases, let's list some properties that we
-would like to hold.
+First of all, there are two kinds of intersections: a "clear" intersection where we can compute the
+`y` coordinate of the crossing and it's definitely larger than the current sweep line; in this case we insert an intersection event into the queue.
+On the other hand, it could be that
+the two lines definitely intersect somewhere but they're too close to coincident to really figure out when, or maybe their
+intersection point is just about at the current sweep line. In this case -- which we call a "shuffle" intersection --
+we re-order the current sweep line.
 
-Fix $y$ and suppose we have two segments $alpha^1$ and $alpha^2$ satisfying $alpha^1 prec_(y,epsilon) alpha^2$.
-- If the segments $epsilon$-cross then they have a clear intersection or a shuffle intersection (or both).
-- If the segments clearly intersect, there is an algorithm that computes a lower bound $hat(y)$ on the exact intersection height,
-  with the property that $alpha^1(hat(y)) >= alpha^2(hat(y)) - epsilon$.
-
-The second property imposes a requirement on the allowable slopes for $alpha^1$ and $alpha^2$. With finite precision
-and almost-horizontal lines, such a $hat(y)$ might not exist. The current implementation has some special logic
-for exactly horizontal lines (which is not yet written up here), and deals with almost-horizontal lines by perturbing
-them to be exactly horizontal. The reason we insist on a lower bound will become clear later.
-
-Now let's try to come up with definitions that satisfy our properties:
+Here's a definition:
 #def[
 Suppose $alpha prec_(y,epsilon) beta$.
 We say that *$(alpha, beta)$ have a shuffle intersection at $y$* if $beta(y) < alpha(y)$ and $(alpha, beta)$ $epsilon$-cross.
 We say that *$(alpha, beta)$ have a clear intersection at $y$* if $(alpha, beta)$ $epsilon$-cross but do not have a shuffle intersection at $y$.
 ]
+
+Fix $y$ and suppose we have two segments $alpha$ and $beta$ satisfying $alpha prec.tilde_(y,epsilon) beta$.
+- If $(alpha, beta)$ $epsilon$-cross then they have a clear intersection or a shuffle intersection.
+- If $alpha$ and $beta$ clearly intersect, there is an algorithm that computes a lower bound $hat(y)$ on the exact intersection height,
+  with the property that $alpha succ.tilde_(hat(y),epsilon) beta$.
+
+TODO: the second of these properties should be an assumption (on $epsilon$, and on the admissible segments $alpha$ and $beta$). I think
+this can be done for every pair that intersect, not just "clearly" intersecting ones.
+
 
 Clearly these definitions satisfy the first desired property (if $(alpha, beta)$ $epsilon$-cross then there is some kind
 of intersection). To check that they satisfy the second property requires some more careful analysis (which will only
@@ -421,3 +453,100 @@ In order to handle the crossing invariant of one swap, we treat it as an "exit" 
 to handle the removal of $alpha^i$ from its old location we run intersection scans on $alpha^(i-1)$ (strict to the left; non-strict
 to the right) and $alpha^(i+1)$ (strict to the right; non-strict to the left). Then we run a (non-strict) intersection scan on $alpha^i$
 in its new location.
+
+=== The "push"
+
+TODO: This should go in an earlier section at some point.
+
+The following diagram shows an $epsilon$-ordered sweep line $(alpha, beta, gamma)$. Note that $beta prec_(y,epsilon) gamma$, but all
+the other pairs are non-strictly ordered. Because our arithmetic isn't exact, we might encounter this sweep line at the intersection
+event of $alpha$ and $gamma$ even though $alpha$ and $gamma$ don't intersect until a little bit later. But anyway, it's
+reasonable to see this situation and think that we should swap the order of $alpha$ and $gamma$. We need to be careful, though: changing
+the order to $(gamma, alpha, beta)$ doesn't work because $beta prec_(y,epsilon) gamma$. TODO: to explain this better I think
+we need 4 lines...
+
+#cetz.canvas({
+  import cetz.draw: *
+
+  content((-6, 2), $alpha$, anchor: "south", padding: 2pt)
+  line((-7, 2), (3, -2), stroke: (dash: "dashed", thickness: 0.2pt))
+  line((-5, 2), (5, -2), stroke: (dash: "dashed", thickness: 0.2pt))
+  line((-6, 2), (4, -2), name: "a")
+
+  content((5, 2), $gamma$, anchor: "south", padding: 2pt)
+  line((6, 2), (-3, -2), stroke: (dash: "dashed", thickness: 0.2pt))
+  line((4, 2), (-5, -2), stroke: (dash: "dashed", thickness: 0.2pt))
+  line((5, 2), (-4, -2), name: "a")
+
+  content((-1, 2), $beta$, anchor: "south", padding: 2pt)
+  line((-1.3, 2), (-1.3, -2), stroke: (dash: "dashed", thickness: 0.2pt))
+  line((-1, 2), (-1, -2))
+  line((-0.7, 2), (-0.7, -2), stroke: (dash: "dashed", thickness: 0.2pt))
+
+  line((-5, 0.05), (5, 0.05), stroke: (dash: "dotted", thickness: 0.5pt))
+  content((-5, 0.05), $y$, anchor: "east", padding: 2pt)
+})
+
+=== Intersection scans
+
+TODO: this is a re-write of an earlier section, and should get merged there
+
+Suppose we have a collection of lines $(alpha^1, ..., alpha^n)$ that satisfy the ordering invariant
+at $y$, and suppose that $(alpha^1, ..., alpha^(n-1))$ satisfy the crossing invariant at $y$.
+To make the whole collection satisfy both invariants, we run the following algorithm.
+We call this an *intersection scan to the left*.
+
+#pseudocode-list[
+  + $y^n <- y_1(alpha^n)$
+  + *for* $i = n-1$ down to $1$
+    + *if* $(alpha^i, alpha^n)$ $epsilon$-cross by $y^(i+1)$
+      + let $z in [y, y^*]$ be a valid crossing height for $(alpha^i, alpha^n)$
+      + insert an intersection event for $(alpha^i, alpha^n)$ at $z$
+      + $y^i <- z$
+    + #line-label(<shadow>) *else if* $alpha^i_+(z) <= alpha^n_+(z)$ for all $z in [y, y^(i+1)]$
+      + *break*
+    + *else*
+      + $y^i <- y^(i+1)$
+]
+
+#lemma[
+Suppose $(alpha^1, ..., alpha^n)$ satisfies the ordering invariants at $y$, and suppose that
+$(alpha^1, ..., alpha^(n-1))$ satisfies the crossing invariant at $y$. After running an intersection scan to the left,
+$(alpha^1, ..., alpha^n)$ satisfy the crossing invariant at $y$.
+]<lem-intersection-scan2>
+
+#proof[
+  Let's first note a straightforward invariant of the algorithm:
+  
+  #invariant[
+    at iteration $i$ of the loop, there is an event between $i$ and $n$ with height at most $y^(i+1)$
+  ]<easy-loop-invariant>
+
+  This invariant holds initially for $i = n-1$,
+  witnessed by $alpha^n$'s exit event. Then we either copy $y^i <- y^(i+1)$ (and so the same event
+  will witness the next iteration's invariant) or we set $y^i <- z$ and add a new intersection event that
+  will witness the next iteration's invariant.
+
+  We only need to check the crossing invariant for pairs of the form $(alpha^j, alpha^n)$. So take some $j < n$ and assume
+  that $(alpha^j, alpha^n)$ $epsilon$-cross. We consider two cases:
+
+  - if the loop in the intersection scan included $i = j$, then we break into two more cases:
+    - if $(alpha^j, alpha^n)$ $epsilon$-cross by $y^(j+1)$ then the algorithm inserts an intersection event,
+      and this new intersection event witnesses the crossing invariant
+    - otherwise, by @easy-loop-invariant there is some other event that witnesses the crossing invariant
+  - if the loop in the intersection scan didn't include $i = j$, then the loop terminated at some $i > j$;
+    fix that $i$. If $(alpha^j, alpha^n)$ don't $epsilon$-cross by $y^(i+1)$ then @easy-loop-invariant gives
+    us an event that witnesses the crossing invariant, so assume that $(alpha^j, alpha^n)$ do $epsilon$-cross by $y^(i+1)$.
+    Let $y^* <= y^(i+1)$ be the $epsilon$-crossing height of $(alpha^j, alpha^n)$.
+
+    Since the loop terminated in iteration $i$, the test at @shadow must have passed. Therefore,
+    $alpha^i_+(z) <= alpha^n_+(z)$ for all $z in [y, y^(i+1)]$. Then the definition of $y^*$ ensures that
+
+    $
+    alpha^j_-(y^*) >= alpha^n_+(y^*) >= alpha^i_+(y^*),
+    $
+
+    and so $(alpha^j, alpha^i)$ $epsilon$-cross by $y^*$. Since we assumed that $(alpha^1, ..., alpha^(n-1))$ satisfy
+    the crossing invariant, there is an event between $j$ and $i$ with height at most $y^*$. This event is
+    also between $j$ and $n$, and so it witnesses the crossing invariant for $j$ and $n$.
+]
