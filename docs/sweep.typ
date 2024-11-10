@@ -113,7 +113,10 @@ Here are a few basic properties of our definitions:
   and $beta prec_(y,epsilon) gamma$ then $alpha prec.tilde_(y,epsilon) gamma$.
 4. For any $y$, the relation $prec_(y,epsilon)$ is monotone in $epsilon$, in that if $alpha prec_(y,epsilon) beta$ then $alpha prec_(y,eta) beta$ for
   any $eta in (0, epsilon)$.
-]
+]<lem-basic-order-properties>
+
+Since $epsilon$ for us will usually be fixed, we will often drop it from the notation, and write $alpha_-$ and $alpha_+$ instead
+of $alpha_(-,epsilon)$ and $alpha_(+,epsilon)$.
 
 #def[
   Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$alpha$ and $beta$
@@ -220,96 +223,65 @@ In vanilla Bentley-Ottmann, each segment gets compared to its two sweep-line nei
 When numerical errors are taken into account, we may need to compare to
 more segments. TODO: draw an example with three segments.
 
-First of all, there are two kinds of intersections: a "clear" intersection where we can compute the
-`y` coordinate of the crossing and it's definitely larger than the current sweep line; in this case we insert an intersection event into the queue.
-On the other hand, it could be that
-the two lines definitely intersect somewhere but they're too close to coincident to really figure out when, or maybe their
-intersection point is just about at the current sweep line. In this case -- which we call a "shuffle" intersection --
-we re-order the current sweep line.
+TODO: define a crossing that isn't an $epsilon$-crossing. (The definition is probably what you'd guess.)
 
-Here's a definition:
-#def[
-Suppose $alpha prec_(y,epsilon) beta$.
-We say that *$(alpha, beta)$ have a shuffle intersection at $y$* if $beta(y) < alpha(y)$ and $(alpha, beta)$ $epsilon$-cross.
-We say that *$(alpha, beta)$ have a clear intersection at $y$* if $(alpha, beta)$ $epsilon$-cross but do not have a shuffle intersection at $y$.
+Fix $y$ and $epsilon$, and
+suppose we have a collection of lines $(alpha^i, ..., alpha^n)$ that satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^(i+1), ..., alpha^n)$
+satisfy the crossing invariant at $y$.
+To make the whole collection satisfy both invariants, we run the following algorithm.
+We call this an *intersection scan to the right*.
+
+#pseudocode-list[
+  + *for* $j = i+1$ up to $n$
+    + #line-label(<w-def>) let $w^j$ be the smallest height of any event between $i$ and $j$
+
+    + *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
+      + choose $z$ before the crossing, such that $alpha^i approx_(z,epsilon) alpha^j$
+      + insert an intersection event for $(alpha^i, alpha^j)$ at $z$
+
+    + #line-label(<protect>) *if* $alpha^i (z) <= alpha^j_-(z)$ for all $z in [y, w^j]$
+      + *break*
 ]
-
-Fix $y$ and suppose we have two segments $alpha$ and $beta$ satisfying $alpha prec.tilde_(y,epsilon) beta$.
-- If $(alpha, beta)$ $epsilon$-cross then they have a clear intersection or a shuffle intersection.
-- If $alpha$ and $beta$ clearly intersect, there is an algorithm that computes a lower bound $hat(y)$ on the exact intersection height,
-  with the property that $alpha succ.tilde_(hat(y),epsilon) beta$.
-
-TODO: the second of these properties should be an assumption (on $epsilon$, and on the admissible segments $alpha$ and $beta$). I think
-this can be done for every pair that intersect, not just "clearly" intersecting ones.
-
-
-Clearly these definitions satisfy the first desired property (if $(alpha, beta)$ $epsilon$-cross then there is some kind
-of intersection). To check that they satisfy the second property requires some more careful analysis (which will only
-work when $epsilon$ is sufficiently large depending on the precision of the floating point numbers we're using),
-but the point is that if $(alpha, beta)$ clearly cross then their "slopes" (not exactly their slopes, but close enough)
-are at least $epsilon$ apart and so we can compute intersections accurately enough.
 
 #inexact[
-in practice, there will be some numerical
-errors in evaluating these definitions, but that's ok if we're careful about the error direction: if $beta(y)$ is just barely bigger than $alpha(y)$, we
-can allow a false positive in the shuffle intersection test, and the numerical stability for the clear intersection
-test will just be a little bit worse. On the other hand, we *insist* that for a clear intersection,
-$beta(y)$ is truly at least $alpha(y)$ (and so we can give a lower bound on the intersection height that's larger than the current sweep height).
+The test at @protect can be seen as an early-stopping optimization, and is not necessary for correctness.
+In particular, if it is difficult to evaluate the test exactly then an approximation with no false positives
+is also fine.
 ]
-
-Now we're ready to talk about our replacement for Bentley-Ottmann's "just compare to the next segment" step. Imagine
-we have an $epsilon$-ordered collection $(alpha^1, ..., alpha^m)$ and we want to see if $alpha^i$ intersects with anything
-"before" it in the collection. We'll call this procedure an *intersection scan to the left*.
-For each $j$ from $i - 1$ down to $1$, we test $alpha^j$ and $alpha^i$ for intersections.
-- If there's a shuffle intersection, we add an intersection event to the event queue (with $y$-coordinate at the current scan-line)
-  and continue.
-- If there's a clear intersection, we add an intersection event to the event queue (with $y$-coordinate that lower-bounds the
-  true intersection height; note that the definition of a clear intersection implies that we can find such a lower bound that's
-  at least the current scan-line's height). Then we stop scanning.
-- If we encounter a segment that's strictly to the left of $alpha^i$ from $y$ onwards, we stop scanning.
-Just to compare once more to Bentley-Ottmann: with exact computations you only need to compare to one segment. Either
-it intersects or it doesn't. With inexact computations, you keep scanning left until you either find something that
-definitely intersects or definitely doesn't.
-
-The *intersection scan to the right* is very similar to the intersection scan to the left: just increase $j$ instead of
-decreasing it. An *intersection scan* combines the two (in either order).
 
 #lemma[
-Suppose $(alpha^1, ..., alpha^(i-1))$ satisfies the ordering and crossing invariants at $y$, and suppose that
-$(alpha^1, ..., alpha^i)$ satisfies the ordering invariant at $y$. After running an intersection scan to the left,
-it also satisfies the crossing invariant at $y$.
+Suppose that $(alpha^i, ..., alpha^n)$ satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^(i+1), ..., alpha^n)$
+satisfy the crossing invariant at $y$.
+After running an intersection scan to the right,
+$(alpha^i, ..., alpha^n)$ satisfy the crossing invariant at $y$.
 
-Similarly, suppose $(alpha^(i+1), ..., alpha^m)$ satisfies the ordering and crossing invariants at $y$, and suppose that
-$(alpha^i, ..., alpha^m)$ satisfies the ordering invariant at $y$. After running an intersection scan to the right,
-it also satisfies the crossing invariant at $y$.
+In fact, $(alpha^i, ..., alpha^n)$ satisfy a slightly stronger crossing invariant at $y$: if for every $j > i$
+if $(alpha^i, alpha^j_(+,epsilon))$ cross then the event queue contains an event between $i$ and $j$, and before
+ the crossing height.
 ]<lem-intersection-scan>
 
+(The special thing about the stronger crossing invariant is that it asks whether
+$(alpha^i, alpha^j_(+,epsilon))$ cross, where the usual crossing invariant asks
+whether 
+$(alpha^i_(-,epsilon), alpha^j_(+,epsilon))$ cross.)
+
 #proof[
-We'll prove the first claim; the second is similar. Because the crossing invariant holds without $alpha^i$, we only
-need to consider intersections involving $alpha^i$. So suppose that $j < i$ and $(alpha^j, alpha^i)$ $epsilon$-cross.
-If we encountered $alpha^j$ when scanning for $alpha^i$'s intersections, we would have inserted an intersection event
-and that intersection event would witness the crossing invariant. So let's assume that when scanning for $alpha^i$'s clear intersections,
-we stopped the scan at $alpha^k$ for some $k > j$.
+  It suffices to check the stronger crossing invariant.
+  So take some $k > i$
+  that $(alpha^i, alpha^k_(+,epsilon))$ cross. We consider two cases: whether or not the loop terminated
+  before reaching $k$.
 
-There are two reasons we might have stopped the clear intersection scan:
-- if $alpha^k$ clearly intersects $alpha^i$, we inserted an intersection event at some $y$-coordinate that's less than or equal to the
-  true intersection $y$-coordinate. Let $y_k$ be the $y$-coordinate of the intersection event that we inserted. There are two sub-cases:
-  - if $alpha^j$ $epsilon$-crosses $alpha^i$ after $y_k$, then the intersection event we inserted witnesses
-    the crossing invariant.
-  - otherwise, $alpha^j$ $epsilon$-crosses $alpha^i$ before $y_k$, and therefore also before the true intersection between
-    $alpha^k$ and $alpha^i$. Therefore, $alpha^j$ $epsilon$-crosses $alpha^k$ before $alpha^j$ $epsilon$-crosses $alpha^i$. By the
-    crossing invariant for the old sweep-line, the queue contains some witnessing event for the $epsilon$-crossing of $alpha^j$ and $alpha^k$;
-    and this event also witnesses the crossing invariant for the $epsilon$-crossing between $alpha^j$ and $alpha^i$.
-- Otherwise, scanning terminated because $alpha^k$ doesn't meet $alpha^i$.
-  - If $alpha^j$ $epsilon$-crosses $alpha^i$ after $alpha^k$ ends, the exit event witnesses the crossing invariant.
-  - Otherwise, $alpha^j$ must $epsilon$-cross $alpha^k$ before it $epsilon$-crosses $alpha^i$. The crossing invariant
-    for the old sweep-line guarantees the existence of an event witnessing the new sweep-line invariant.
-]
-
-#inexact[
-when deciding when to stop scanning to the left, we can't exactly check whether a segment is strictly to the left of $alpha^i$.
-We allow false negatives but not false positives; this might result in a little extra scanning, but it ensures that the proof
-still works.
+  - Suppose the loop terminated at some $j < k$. If $(alpha^i, alpha^k_(+,epsilon))$ cross
+    after $w^j$, then the definition of $w^j$ ensures that there is an event between $i$ and $j$ (and therefore between
+    $i$ and $k$) before the crossing. On the other hand, the termination condition ensures that
+    $alpha^i (z) <= alpha^j_-(z)$ until $w^j$, and so if $(alpha^i, alpha^k_(+,epsilon))$ cross before $w^j$ then
+    also $(alpha^j, alpha^k)$ cross before that. In this case, the crossing invariant for $(alpha^(i+1), ..., alpha^n)$
+    implies the existence of an event between $j$ and $k$ (and therefore between $i$ and $k$) before the crossing.
+  - If the loop included the case $j = k$, we break into two more cases:
+    - If $(alpha^i, alpha^k_(+,epsilon))$ cross by $w^j$, then the algorithm inserted a witnessing event between $i$ and $j$.
+    - Otherwise, the definition of $w^j$ ensures that there is an event between $i$ and $j$ before the crossing.
 ]
 
 == An "enter" event
@@ -320,30 +292,38 @@ before inserting the new segment, and let's call the new segment $beta$. First, 
 there is a place to insert the new segment while preserving the ordering invariant.
 
 #lemma[
-Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$.
-If $alpha^i (y) <= beta(y) <= alpha^(i+1) (y)$ then
-$(alpha^1, ..., alpha^i, beta, alpha^(i+1), ..., alpha^m)$ are $epsilon$-ordered at $y$.
+Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$, and let $i$ the largest $j$ for which
+$alpha^j prec_(y,epsilon) beta)$. Then
+$(alpha^1, ..., alpha^i, beta, alpha^(i+1), ..., alpha^m)$ is $epsilon$-ordered at $y$.
 (Here, we can allow the corner cases $i = 0$ and $i = m$ by declaring that
-"$alpha^0(y)$" means $-infinity$ and "$alpha^(m+1) (y)$" means $infinity$).
+"$alpha^0$" is a vertical line at $-infinity$ and "$alpha^(m+1)$" is a vertical line at $infinity$).
 ]<lem-insert-preserving-order>
 
 #proof[
 Since $(alpha^1, ..., alpha^m)$ was $epsilon$-ordered at $y$, it suffices to compare beta with all $alpha^j$.
-So now fix $1 <= j <= m$. If $j >= i + 1$ then
-$beta (y) <= alpha^(i+1) (y) <= alpha^j (y) + epsilon$ (where the last inequality follows because $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered.
-On the other hand, if $j <= i$ then $alpha^j (y) - epsilon <= alpha^i (y) <= beta (y)$.
+For $i + 1 <= j <= m$, our choice of $i$ immediately implies that $alpha^j succ.tilde_(y,epsilon) beta$.
+So consider $1 <= j <= i$. Since $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered, $alpha^j prec.tilde_(y,epsilon) alpha^i$.
+Since $alpha^i prec_(y,epsilon) beta$, @lem-basic-order-properties implies that $alpha^j prec.tilde_(y,epsilon) beta$.
 ]
 
 #inexact[
-the inequalities $alpha^i (y) <= beta(y) <= alpha^(i+1) (y)$ need to be exact for the proof to work.
-In the face of inexact computations, the problematic case is when $beta(y)$ is very close to (say) $alpha^i (y)$
-and there is some $j < i$ with $alpha^j (y)$ very close to $alpha^i(y) + epsilon$. In this case we might
-wrongly think that $beta(y) >= alpha^i (y)$, and by inserting $beta$ after $alpha^i (y)$ we break
-the ordering invariant for $alpha^j$ and $beta$. This case can probably be handled by scanning left from $alpha^i$
-to look for a problematic $alpha^j$; if we find one, ensure that $beta$ goes to the left of it. The correctness arguments
-here require a bit more thought, but I think one important point is that we can't have a "problematic $alpha^j$" in *both*
-directions, because if we did then those two problematic segments would be almost $2 epsilon$ out-of-order.
+@lem-insert-preserving-order guarantees the existence of an insertion point, but it doesn't say how to
+find it efficiently (or indeed whether it can be found at all with inexact arithmetic).
+But consider a predicate $f(alpha^j)$ that returns true whenever $alpha^j prec_(y,epsilon) beta$, and
+false whenever $alpha^j_+(y) > beta_+(y)$. Running a binary search with this predicate will find some $i$
+for which $f(alpha^i)$ is true and $f(alpha^(i+1))$ is false. By scanning to the right from there, we can
+find the largest such $i$.
+
+This $i$ is at least as large as the $i$ in @lem-insert-preserving-order, so
+to check that it's a valid insertion point we only need to check that it isn't too large. So if $1 <= j <= i$ then
+$alpha^j prec.tilde_(y,epsilon) alpha^i$ and so $alpha^j_-(y) <= alpha^i_+(y)$. On the other hand, $f(alpha^i)$
+was true and so $alpha^i_+ <= beta_+(y)$. Putting these together shows that $alpha^j prec.tilde_(y,epsilon) beta$.
+
+This algorithm can be implemented with approximate arithmetic, and its running time is logarithmic in the
+total length of the sweep line, plus linear in the number of elements that are very close to $beta$.
 ]
+
+TODO: write the two-sided scan thing, and reference it here instead of @lem-intersection-scan.
 
 @lem-insert-preserving-order implies that we can insert a new segment while preserving the ordering invariant. By
 @lem-intersection-scan, running an intersection scan restores the crossing invariant.
@@ -487,130 +467,3 @@ we need 4 lines...
   content((-5, 0.05), $y$, anchor: "east", padding: 2pt)
 })
 
-=== Intersection scans
-
-TODO: this is a re-write of an earlier section, and should get merged there
-
-Suppose we have a collection of lines $(alpha^1, ..., alpha^n)$ that satisfy the ordering invariant
-at $y$, and suppose that $(alpha^1, ..., alpha^(n-1))$ satisfy the crossing invariant at $y$.
-To make the whole collection satisfy both invariants, we run the following algorithm.
-We call this an *intersection scan to the left*.
-
-#pseudocode-list[
-  + $y^n <- y_1(alpha^n)$
-  + *for* $i = n-1$ down to $1$
-    + *if* $(alpha^i, alpha^n)$ $epsilon$-cross by $y^(i+1)$
-      + let $z in [y, y^*]$ be a valid crossing height for $(alpha^i, alpha^n)$
-      + insert an intersection event for $(alpha^i, alpha^n)$ at $z$
-      + $y^i <- z$
-    + #line-label(<shadow>) *else if* $alpha^i_+(z) <= alpha^n_+(z)$ for all $z in [y, y^(i+1)]$
-      + *break*
-    + *else*
-      + $y^i <- y^(i+1)$
-]
-
-#lemma[
-Suppose $(alpha^1, ..., alpha^n)$ satisfies the ordering invariants at $y$, and suppose that
-$(alpha^1, ..., alpha^(n-1))$ satisfies the crossing invariant at $y$. After running an intersection scan to the left,
-$(alpha^1, ..., alpha^n)$ satisfy the crossing invariant at $y$.
-]<lem-intersection-scan2>
-
-#proof[
-  Let's first note a straightforward invariant of the algorithm:
-  
-  #invariant[
-    at iteration $i$ of the loop, there is an event between $i$ and $n$ with height at most $y^(i+1)$
-  ]<easy-loop-invariant>
-
-  This invariant holds initially for $i = n-1$,
-  witnessed by $alpha^n$'s exit event. Then we either copy $y^i <- y^(i+1)$ (and so the same event
-  will witness the next iteration's invariant) or we set $y^i <- z$ and add a new intersection event that
-  will witness the next iteration's invariant.
-
-  We only need to check the crossing invariant for pairs of the form $(alpha^j, alpha^n)$. So take some $j < n$ and assume
-  that $(alpha^j, alpha^n)$ $epsilon$-cross. We consider two cases:
-
-  - if the loop in the intersection scan included $i = j$, then we break into two more cases:
-    - if $(alpha^j, alpha^n)$ $epsilon$-cross by $y^(j+1)$ then the algorithm inserts an intersection event,
-      and this new intersection event witnesses the crossing invariant
-    - otherwise, by @easy-loop-invariant there is some other event that witnesses the crossing invariant
-  - if the loop in the intersection scan didn't include $i = j$, then the loop terminated at some $i > j$;
-    fix that $i$. If $(alpha^j, alpha^n)$ don't $epsilon$-cross by $y^(i+1)$ then @easy-loop-invariant gives
-    us an event that witnesses the crossing invariant, so assume that $(alpha^j, alpha^n)$ do $epsilon$-cross by $y^(i+1)$.
-    Let $y^* <= y^(i+1)$ be the $epsilon$-crossing height of $(alpha^j, alpha^n)$.
-
-    Since the loop terminated in iteration $i$, the test at @shadow must have passed. Therefore,
-    $alpha^i_+(z) <= alpha^n_+(z)$ for all $z in [y, y^(i+1)]$. Then the definition of $y^*$ ensures that
-
-    $
-    alpha^j_-(y^*) >= alpha^n_+(y^*) >= alpha^i_+(y^*),
-    $
-
-    and so $(alpha^j, alpha^i)$ $epsilon$-cross by $y^*$. Since we assumed that $(alpha^1, ..., alpha^(n-1))$ satisfy
-    the crossing invariant, there is an event between $j$ and $i$ with height at most $y^*$. This event is
-    also between $j$ and $n$, and so it witnesses the crossing invariant for $j$ and $n$.
-]
-
-=== Intersection scans, early intersection version
-
-TODO: this is a re-write of an earlier section, and should get merged there
-TODO: define a crossing that isn't an $epsilon$-crossing
-
-Fix $y$ and $epsilon$, and
-suppose we have a collection of lines $(alpha^i, ..., alpha^n)$ that satisfy the ordering invariant
-at $y$, and suppose also that $(alpha^(i+1), ..., alpha^n)$
-satisfy the crossing invariant at $y$.
-To make the whole collection satisfy both invariants, we run the following algorithm.
-We call this an *intersection scan to the right*.
-
-#pseudocode-list[
-  + *for* $j = i+1$ up to $n$
-    + #line-label(<w-def>) let $w^j$ be the smallest height of any event between $i$ and $j$
-
-    + *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
-      + choose $z$ before the crossing, such that $alpha^i approx_(z,epsilon) alpha^j$
-      + insert an intersection event for $(alpha^i, alpha^j)$ at $z$
-
-    + #line-label(<protect>) *if* $alpha^i (z) <= alpha^j_-(z)$ for all $z in [y, w^j]$
-      + *break*
-]
-
-#inexact[
-The test at @protect can be seen as an early-stopping optimization, and is not necessary for correctness.
-In particular, if it is difficult to evaluate the test exactly then an approximation with no false positives
-is also fine.
-]
-
-#lemma[
-Suppose that $(alpha^i, ..., alpha^n)$ satisfy the ordering invariant
-at $y$, and suppose also that $(alpha^(i+1), ..., alpha^n)$
-satisfy the crossing invariant at $y$.
-After running an intersection scan to the right,
-$(alpha^i, ..., alpha^n)$ satisfy the crossing invariant at $y$.
-
-In fact, $(alpha^i, ..., alpha^n)$ satisfy a slightly stronger crossing invariant at $y$: if for every $j > i$
-if $(alpha^i, alpha^j_(+,epsilon))$ cross then the event queue contains an event between $i$ and $j$, and before
- the crossing height.
-]<lem-intersection-scan2>
-
-(The special thing about the stronger crossing invariant is that it asks whether
-$(alpha^i, alpha^j_(+,epsilon))$ cross, where the usual crossing invariant asks
-whether 
-$(alpha^i_(-,epsilon), alpha^j_(+,epsilon))$ cross.)
-
-#proof[
-  It suffices to check the stronger crossing invariant.
-  So take some $k > i$
-  that $(alpha^i, alpha^k_(+,epsilon))$ cross. We consider two cases: whether or not the loop terminated
-  before reaching $k$.
-
-  - Suppose the loop terminated at some $j < k$. If $(alpha^i, alpha^k_(+,epsilon))$ cross
-    after $w^j$, then the definition of $w^j$ ensures that there is an event between $i$ and $j$ (and therefore between
-    $i$ and $k$) before the crossing. On the other hand, the termination condition ensures that
-    $alpha^i (z) <= alpha^j_-(z)$ until $w^j$, and so if $(alpha^i, alpha^k_(+,epsilon))$ cross before $w^j$ then
-    also $(alpha^j, alpha^k)$ cross before that. In this case, the crossing invariant for $(alpha^(i+1), ..., alpha^n)$
-    implies the existence of an event between $j$ and $k$ (and therefore between $i$ and $k$) before the crossing.
-  - If the loop included the case $j = k$, we break into two more cases:
-    - If $(alpha^i, alpha^k_(+,epsilon))$ cross by $w^j$, then the algorithm inserted a witnessing event between $i$ and $j$.
-    - Otherwise, the definition of $w^j$ ensures that there is an event between $i$ and $j$ before the crossing.
-]
