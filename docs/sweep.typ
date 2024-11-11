@@ -232,17 +232,20 @@ satisfy the crossing invariant at $y$.
 To make the whole collection satisfy both invariants, we run the following algorithm.
 We call this an *intersection scan to the right*.
 
-#pseudocode-list[
-  + *for* $j = i+1$ up to $n$
-    + #line-label(<w-def>) let $w^j$ be the smallest height of any event between $i$ and $j$
+#figure(
+  pseudocode-list([
+    + *for* $j = i+1$ up to $n$
+      + #line-label(<w-def>) let $w^j$ be the smallest height of any event between $i$ and $j$
 
-    + *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
-      + choose $z$ before the crossing, such that $alpha^i approx_(z,epsilon) alpha^j$
-      + insert an intersection event for $(alpha^i, alpha^j)$ at $z$
+      + *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
+        + choose $z$ before the crossing, such that $alpha^i approx_(z,epsilon) alpha^j$
+        + insert an intersection event for $(alpha^i, alpha^j)$ at $z$
 
-    + #line-label(<protect>) *if* $alpha^i (z) <= alpha^j_-(z)$ for all $z in [y, w^j]$
-      + *break*
-]
+      + #line-label(<protect>) *if* $alpha^i (z) <= alpha^j_-(z)$ for all $z in [y, w^j]$
+        + *break*
+  ]),
+  caption: "Intersection scan to the right"
+)
 
 #inexact[
 The test at @protect can be seen as an early-stopping optimization, and is not necessary for correctness.
@@ -257,7 +260,7 @@ satisfy the crossing invariant at $y$.
 After running an intersection scan to the right,
 $(alpha^i, ..., alpha^n)$ satisfy the crossing invariant at $y$.
 
-In fact, $(alpha^i, ..., alpha^n)$ satisfy a slightly stronger crossing invariant at $y$: if for every $j > i$
+In fact, $(alpha^i, ..., alpha^n)$ satisfy a slightly stronger crossing invariant at $y$: for every $j > i$,
 if $(alpha^i, alpha^j_(+,epsilon))$ cross then the event queue contains an event between $i$ and $j$, and before
  the crossing height.
 ]<lem-intersection-scan>
@@ -282,6 +285,61 @@ $(alpha^i_(-,epsilon), alpha^j_(+,epsilon))$ cross.)
   - If the loop included the case $j = k$, we break into two more cases:
     - If $(alpha^i, alpha^k_(+,epsilon))$ cross by $w^j$, then the algorithm inserted a witnessing event between $i$ and $j$.
     - Otherwise, the definition of $w^j$ ensures that there is an event between $i$ and $j$ before the crossing.
+]
+
+As you might have already guessed, we can also intersection scan to the left; it's pretty much a reflection
+of the other one.
+
+#figure(
+  pseudocode-list([
+    + *for* $j = i$ down to $1$
+      + let $w^j$ be the smallest height of any event between $j$ and $i$
+
+      + *if* $(alpha^j_(-,epsilon), alpha^i$ cross by $w^j$
+        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^i$
+        + insert an intersection event for $(alpha^j, alpha^i)$ at $z$
+
+      + *if* $alpha^j_+ (z) <= alpha^i (z)$ for all $z in [y, w^j]$
+        + *break*
+  ]),
+  caption: "Intersection scan to the left"
+)
+
+We'll skip the proof of the following lemma, because it's basically the same as the last one.
+
+#lemma[
+Suppose that $(alpha^1, ..., alpha^i)$ satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^1, ..., alpha^(i+1))$
+satisfy the crossing invariant at $y$.
+After running an intersection scan to the left,
+$(alpha^1, ..., alpha^(i+1))$ satisfy a slightly stronger crossing invariant at $y$: for every $j <= i$,
+if $(alpha^j_(-,epsilon), alpha^(i+1))$ cross then the event queue contains an event between $j$ and $i+1$, and before
+ the crossing height.
+]<lem-intersection-scan-left>
+
+The purpose of the stronger crossing invariant comes in the next lemma, which deals with scanning in both directions
+and allows the insertion of a segment in the middle of a sweep-line.
+
+#lemma[
+Suppose that $(alpha^1, ..., alpha^n)$ satisfy the ordering invariant at $y$, and suppose that
+$(alpha^1, ..., alpha^i)$ and $(alpha^(i+1), ..., alpha^n)$ satisfy the crossing invariant at $y$.
+Let $beta$ be another segment and assume that $(alpha^1, ..., alpha^i, beta, alpha^(i+1), ... alpha^n)$
+satisfy the ordering invariant at $y$. After running an intersection scan to the left and an intersection
+scan to the right from $beta$, 
+$(alpha^1, ..., alpha^i, beta, alpha^(i+1), ... alpha^n)$ satisfies the crossing invariant at $y$.
+]<lem-intersection-scan-bidirectional>
+
+#proof[
+@lem-intersection-scan implies that $(beta, alpha^(i+1), dots, alpha^n)$ satisfies the crossing invariant,
+and
+@lem-intersection-scan-left implies that $(alpha^1, ..., alpha^i, beta)$ does also. It only remains
+to consider interactions between a segment before $beta$ and one after. So fix $j <= i < k$ and suppose
+that $(alpha^j, alpha^k)$ $epsilon$-cross. If they $epsilon$-cross after $y_1(beta)$ then $beta$ exit
+event witnesses the crossing invariant, so assume that $(alpha^j, alpha^k)$ $epsilon$-cross by $y_1(beta)$.
+Then $(alpha^j_-, alpha^k_+)$ cross by $y_1(beta)$, and so one of them crosses $beta$ before $(alpha^j, alpha^k)$ $epsilon$-cross.
+If $(alpha^j_-, beta)$ cross then @lem-intersection-scan-left implies that there is an event between $alpha^j$ and $beta$ (and
+therefore between $alpha^j$) and $alpha^k$ before the crossing height; otherwise, $(beta, alpha^k_+)$ cross
+and so @lem-intersection-scan provides the required event.
 ]
 
 == An "enter" event
@@ -323,10 +381,8 @@ This algorithm can be implemented with approximate arithmetic, and its running t
 total length of the sweep line, plus linear in the number of elements that are very close to $beta$.
 ]
 
-TODO: write the two-sided scan thing, and reference it here instead of @lem-intersection-scan.
-
 @lem-insert-preserving-order implies that we can insert a new segment while preserving the ordering invariant. By
-@lem-intersection-scan, running an intersection scan restores the crossing invariant.
+@lem-intersection-scan-bidirectional, running an intersection scan restores the crossing invariant.
 Thus, we can insert a new segment while preserving the sweep-line invariants.
 
 == An "exit" event
