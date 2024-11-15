@@ -66,18 +66,21 @@ Roughly speaking, the "error bars" on $alpha$ amount to adding this horizontal e
 more accurate around the corners, by truncating these error bars to the horizontal extends of $alpha$. Precisely, we define
 
 $
-alpha_(+,epsilon)(y) = min(alpha(y) + epsilon / (|cos theta_alpha|), max(alpha(y_0), alpha(y_1))) \
-alpha_(-,epsilon)(y) = max(alpha(y) - epsilon / (|cos theta_alpha|), min(alpha(y_0), alpha(y_1))) \
+alpha_(+,epsilon)(y) = min(alpha(y) + epsilon / (|cos theta_alpha|), max(alpha(y_0), alpha(y_1)) + epsilon) \
+alpha_(-,epsilon)(y) = max(alpha(y) - epsilon / (|cos theta_alpha|), min(alpha(y_0), alpha(y_1)) - epsilon) \
 $
 
 In pictures, the gray shaded region is the region between $alpha_(-,epsilon)$ and $alpha_(+,epsilon)$:
+The point of the scaling by $|cos theta_alpha|$ is to make this an approximation of an $epsilon$-neighborhood (in the
+perpendicular direction) of the line segment. The truncation near the corners ensures that if $x$ is between
+$alpha_(-,epsilon)(y)$ and $alpha_(+,epsilon)(y)$ then it is within $sqrt(2) epsilon$ of $alpha$.
 
 #cetz.canvas({
   import cetz.draw: *
 
-  line((0.5, 3), (0, 1.5), (0, 0), (0.5, 0), (1, 1.5), (1, 3), close: true, fill: gray, stroke: 0pt)
-  line((0.5, 3), (0, 1.5), (0, 0), stroke: ( dash: "dashed" ))
-  line((0.5, 0), (1, 1.5), (1, 3), stroke: ( dash: "dashed" ))
+  line((0.5, 3), (-0.3, 0.6), (-0.3, 0), (0.5, 0), (1.3, 2.4), (1.3, 3), close: true, fill: gray, stroke: 0pt)
+  line((0.5, 3), (-0.3, 0.6), (-0.3, 0), stroke: ( dash: "dashed" ))
+  line((0.5, 0), (1.3, 2.4), (1.3, 3), stroke: ( dash: "dashed" ))
 
   line((1, 3), (0, 0), name: "a")
   line((-4, 3), (4, 3), stroke: (dash: "dotted"))
@@ -156,11 +159,14 @@ that your previously-weak order becomes a real order:
 
 #lemma[
 If $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$ then there exist $x^1 <= ... <= x^m$ such that
-$alpha_(-,epsilon)^i (y) <= x^i <= alpha_(+,epsilon)^i(y)$ for all $i$.
+$alpha_(-,epsilon)^i (y) <= x^i <= alpha_(+,epsilon)^i (y)$ for all $i$.
 ]
 
 #proof[
-Define $x^i = max_(j <= i) alpha_(+,epsilon)^j(y)$.
+Define $x^i = max_(j <= i) alpha_(-,epsilon)^j (y)$.
+Since we've included $j = i$, this clearly satisfies $x^i >= alpha_(-,epsilon)^j (y)$.
+For the other inequality, the ordering condition implies that $alpha^j_(-,epsilon) (y) <= alpha^i_(+,epsilon) (y)$
+for every $j <= i$. Therefore this inequality still holds for the maximum over these $j$. 
 ]
 
 So once we have our family of approximate sweep-lines, we can go back and perturb the lines so that our
@@ -295,7 +301,7 @@ of the other one.
     + *for* $j = i$ down to $1$
       + let $w^j$ be the smallest height of any event between $j$ and $i$
 
-      + *if* $(alpha^j_(-,epsilon), alpha^i$ cross by $w^j$
+      + *if* $(alpha^j_(-,epsilon), alpha^i)$ cross by $w^j$
         + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^i$
         + insert an intersection event for $(alpha^j, alpha^i)$ at $z$
 
@@ -341,6 +347,13 @@ If $(alpha^j_-, beta)$ cross then @lem-intersection-scan-left implies that there
 therefore between $alpha^j$) and $alpha^k$ before the crossing height; otherwise, $(beta, alpha^k_+)$ cross
 and so @lem-intersection-scan provides the required event.
 ]
+
+One last observation in this section, that follows trivially from the algorithm:
+
+#lemma[
+If an intersection scan inserts an intersection event for $(alpha, beta)$
+then the intersection event's height $z$ satisfies $alpha approx_(z,epsilon) beta$.
+]<lem-valid-intersection-events>
 
 == An "enter" event
 
@@ -393,133 +406,59 @@ crossing invariant was witnessed by the exit event that was just processed.
 To restore the crossing invariant, we need to enqueue some new intersection events.
 
 Let $(alpha^1, ..., alpha^m)$ be the sweep-line after removing the just-exited segment
-which, we assume, used to live between $alpha^i$ and $alpha^(i+1)$. It is tempting to
-intersection-scan $alpha^i$ to the right and $alpha^(i+1)$ to the left. By @lem-intersection-scan,
-this ensures that the both $(alpha^1, ..., alpha^(i+1))$ and $(alpha^i, ..., alpha^m)$ satisfy
-the crossing invariant. However, this does not imply that the whole sweep-line satisfies the
-crossing invariant. For example, it is possible that $alpha^(i-1)$ sticks out $2/3 epsilon$
-to the right of $alpha^i$ and $alpha^(i+2)$ sticks out $2/3 epsilon$ to the left of $alpha^(i+1)$,
-and $alpha^(i-1)$ $epsilon$-crosses $alpha^(i+2)$ in violation of the crossing invariant.
-
-To fix this problem, we will need a *strict intersection scan*, which is similar to the previous scan except
-that we declare crossings at a threshold of $epsilon/2$ instead of $epsilon$, and
-the stopping criterion is stricter. We'll describe only the leftward version,
-starting at $alpha^i$. As before, we iterate $j$ from $i-1$ down to $1$. Unlike the non-strict version,
-we will keep track of the soonest (i.e. smallest $y$-coordinate) clear intersection we've seen so far; call it $y^*$.
-- If we encounter an $epsilon/2$-shuffle intersection, we add an intersection event, update $y^*$, and continue scanning.
-- If we encounter as $epsilon/2$-clear intersection, we add an intersection event as before; we also update $y^*$ if appropriate.
-  Then we check whether $alpha^j$ is at least $epsilon/2$ to the left of $alpha^j$ for all heights between $y$ and $y^*$.
-  If so, we stop scanning.
-- If we encounter a segment that's at least $epsilon/2$ to the left of $alpha^j$ for all heights between $y$ and $y^*$, we stop scanning.
-
-The point of this strict intersection scan is that it imposes a crossing invariant with half the error (although only for $alpha^i$, and
-only in one direction).
-  
-#lemma[
-Suppose $(alpha^1, ..., alpha^(i-1))$ satisfies the ordering and crossing invariants at $y$, and suppose that
-$(alpha^1, ..., alpha^i)$ satisfies the ordering invariant at $y$. After running a strict intersection scan to the left,
-the following stronger crossing invariant holds: for every $j < i$, if $alpha^j$ $epsilon/2$-crosses $alpha^i$ then the
-event queue contains an event between $j$ and $i$,
-and at least one of these events occurs either before the $epsilon/2$-crossing height or at $y$.
-]<lem-strict-intersection-scan>
-
-#proof[
-  Suppose $j < i$ and $alpha^j$ $epsilon/2$-crosses $alpha^i$. If the strict intersection scan included $j$, it would have
-  inserted an intersection event for $alpha^j$ and $alpha^i$ (which would witness the crossing invariant),
-  so let's suppose that the scan stopped at $k > j$ and recall the definition of $y^*$ (particularly the fact
-  that we inserted an intersection event at height $y^*$). We consider two cases:
-    - If $alpha^j$ $epsilon/2$-crosses $alpha^i$ after $y^*$ then the intersection event at $y^*$ witnesses the crossing invariant.
-    - Otherwise, $alpha^j$ $epsilon/2$-crosses $alpha^i$ before $y^*$. Since $alpha^k$ is at least $epsilon/2$ less to the left
-      of $alpha^i$ up to $y^*$, it follows that $alpha^j$ $epsilon$-crosses $alpha^k$ before it $epsilon/2$-crosses $alpha^i$.
-      By the old crossing invariant, there is an event witnessing $alpha^j$ $epsilon$-crossing $alpha^k$; this same
-      event witnesses $alpha^j$ $epsilon/2$-crossing $alpha^i$.
-]
-
-To finish handling the exit event, we run a strict intersection scan to the left of $alpha^i$ and a strict
-intersection scan to the right of $alpha^(i+1)$. These two extra intersection scans ensure that without a witnessing
-event in the queue, nothing "before" $alpha^i$ pokes out more than $epsilon/2$ to its right, and nothing "after"
-$alpha^(i+1)$ pokes out more than $epsilon/2$ to its left. This eliminates the possibility of an unhandled
-$epsilon$-crossing, and ensures that we maintain the crossing invariant.
+which, we assume, used to live between $alpha^i$ and $alpha^(i+1)$. Note that both
+$(alpha^1, ..., alpha^i)$ and $(alpha^(i+1), ..., alpha^n)$ satisfy the crossing invariant.
+By @lem-intersection-scan-bidirectional, running an intersection scan from $alpha^i$ in both
+directions restores the crossing invariant. (Technically, this isn't covered by the statement
+of @lem-intersection-scan-bidirectional -- which involves a new segment $beta$ -- but the proof
+is basically the same.)
 
 == An "intersection" event
 
-I don't think we've asserted this yet, but all intersection events in the queue always occur at a height where
-the two crossing segments are within $epsilon$ of one another. Also, intersection events are only inserted
-for $epsilon$-crossing segments, so it's always clear which order the segments should be in after the intersection.
+Suppose our sweep-line is $(alpha^1, ..., alpha^m)$ and we've just encountered an intersection event for $(alpha^i, alpha^j)$
+at height $y$.
+If $i > j$ then they've already been swapped in our sweep-line, so we don't need to swap them again. If $i < j$, we need to
+swap them. According to @lem-valid-intersection-events, $alpha^j prec.tilde_(y,epsilon) alpha^i$. It seems reasonable, therefore,
+to reorder the sweep line by putting $alpha^i$ after $alpha^j$, like
 
-Suppose our sweep-line is $(alpha^1, ..., alpha^m)$ and we've just encountered an intersection event for $alpha^i$ and $alpha^j$,
-where $i < j$. First, we check whether $alpha^i$ and $alpha^j$ actually need to be swapped, as some other intersection event might
-have already swapped them. If they're already in the correct order, we skip the re-ordering step and move on to the crossing invariant.
-If $alpha^i$ and $alpha^j$
-need to be re-ordered, we consider two possibilities: we can move $alpha^j$ before $alpha^i$ or we can move $alpha^i$ after $alpha^j$.
-If $alpha^i(y) >= alpha^j(y)$ then either choice maintains the ordering invariant:
+$
+alpha^1, ..., alpha^(i-1), alpha^(i+1), ..., alpha^j, alpha^i, alpha^(j+1), ... alpha^n.
+$
 
-#lemma[
-Suppose $(alpha^1, ..., alpha^m)$ satisfies the ordering invariant at $y$ and suppose that $i < j$ and $alpha^i (y) >= alpha^j (y)$.
-Then $(alpha^1, ..., alpha^(i-1), alpha^(i+1), ..., alpha^j, alpha^i, alpha^(j+1), ... alpha^m)$ and
-$(alpha^1, ..., alpha^(i-1), alpha^j, alpha^i, ..., alpha^(j-1), alpha^(j+1), ... alpha^m)$ both satisfy the ordering invariant
-at $y$.
-]<lem-reorder>
+The issue with this is that $prec.tilde_(y,epsilon)$ is that it's changed the order of pairs other than $alpha^i$ and $alpha^j$:
+for every $i < k < j$, the ordering between $alpha^i$ and $alpha^k$ has been swapped. If $prec.tilde$ were transitive, this would
+be fine. But it isn't.
 
-#proof[
-  The two claims are essentially the same, so we will consider only the first one. When putting $alpha^i$ after $alpha^j$,
-  the only pairs of segments whose order has changed are $(alpha^i, alpha^k)$ pairs for $i < k <= j$; hence, we only need
-  to re-check the ordering invariant for those pairs. But for such $k$, the old ordering invariant implies
-  that $alpha^k(y) - epsilon <= alpha^j (y)$, and since we assumed $alpha^j (y) <= alpha^i (y)$ it follows that
-  $alpha^k (y) - epsilon <= alpha^i (y)$. Therefore, $alpha^i$ and $alpha^k$ satisfy the new ordering invariant.
+To fix this issue, we allow $alpha^i$ to "push" some of the intermediate segments along with it. It's a bit tedious to write (and read)
+this precisely, so hopefully this description is enough: for each $k$ between $i$ and $j$, if $alpha^i prec_(y,epsilon) alpha^k$ then
+we also move $alpha^k$ after $alpha^j$. Also, we preserve the relative order of all segments moved in this way.
+To see that this "pushing" maintains the ordering invariants, note that by definition it preserves the ordering for all comparisons
+with $alpha^i$: if some $alpha^ell$ was pushed along with $alpha^i$ then their relative orders haven't changed; and if $alpha^ell$
+wasn't pushed then $alpha^ell prec.tilde_(y,epsilon) alpha^i$ and the new order is fine.
+
+What about other pairs? If $alpha^k$ and $alpha^ell$
+changed orders then one of them ($alpha^ell$, say) was pushed and the other wasn't. Then $alpha^i prec_(y,epsilon) alpha^ell$
+by our choice of the pushed segments, and $alpha^k prec.tilde_(y,epsilon) alpha^i$ by the previous paragraph. Putting these
+together, @lem-basic-order-properties implies that $alpha^k prec.tilde_(y,epsilon) alpha^ell$ and so the new order is ok.
+
+#inexact[
+We might not be able to tell exactly which segments $alpha^k$ between $alpha^i$ and $alpha^j$ satisfy
+$alpha^i prec_(y,epsilon) alpha^k$. Fortunately, we can push a few too many segments while stil maintaining
+correctness: it suffices to
+include all segments $alpha^k succ_(y,epsilon) alpha^i$, while also ensuring that we only include $alpha^k$ for which
+$alpha^k_+(y) >= alpha^i_+(y)$.
 ]
 
-It is possible, however that $alpha^i (y) < alpha^j (y)$. This is likely, even, because we tend to create intersection events
-with a height that lower-bounds the actual intersection height. So in general we have a slightly more complex procedure:
-choose $k$ with $i < k <= j$ to be the largest possible such that $alpha^k (y) <= alpha^i (y)$. Then move $alpha^i$ after $alpha^k$.
-(This preserves the ordering invariant by @lem-reorder.) Finally, move $alpha^j$ before $alpha^i$'s new position. This maintains
-the ordering invariant because the only pairs whose orders change were pairs of the form $(alpha^ell, alpha^j)$ for $k <= ell < j$
-and the definition of $k$ ensures that $alpha^ell (y) >= alpha^i (y)$ (which is guaranteed to be at least $alpha^j (y) - epsilon$
-by the fact that there was an intersection event).
+Finally, we need to maintain the crossing invariant. We can probably be more efficient about this, but one
+way to be correct is to treat the various swappings as a bunch of deletions from the sweep-line followed by
+a bunch of insertions into the sweep-line. We have already shown that running an intersection scan
+after each insertion and deletion correctly maintains the crossing invariant, so we can just do that.
 
-=== Maintaining the crossing invariant
+= Full correctness
 
-The final thing we need to do is explain how we maintain the crossing invariant. We'll do this in a slightly abstracted situation:
-we have a sweep-line $(alpha^1, ..., alpha^m)$ that satisfies both invariants, and we move $alpha^i$ to after $alpha^j$ in such
-a way that the ordering invariant is maintained. How do we maintain the crossing invariant? (The intersection-event processing
-contains up to two of these "moves," so if we describe how to maintain the crossing invariant after one of these moves, we'll just
-have to repeat that.)
+TODO: write what full correctness means and explain how to get it.
 
-In order to handle the crossing invariant of one swap, we treat it as an "exit" followed by an "entrance." That is,
-to handle the removal of $alpha^i$ from its old location we run intersection scans on $alpha^(i-1)$ (strict to the left; non-strict
-to the right) and $alpha^(i+1)$ (strict to the right; non-strict to the left). Then we run a (non-strict) intersection scan on $alpha^i$
-in its new location.
-
-=== The "push"
-
-TODO: This should go in an earlier section at some point.
-
-The following diagram shows an $epsilon$-ordered sweep line $(alpha, beta, gamma)$. Note that $beta prec_(y,epsilon) gamma$, but all
-the other pairs are non-strictly ordered. Because our arithmetic isn't exact, we might encounter this sweep line at the intersection
-event of $alpha$ and $gamma$ even though $alpha$ and $gamma$ don't intersect until a little bit later. But anyway, it's
-reasonable to see this situation and think that we should swap the order of $alpha$ and $gamma$. We need to be careful, though: changing
-the order to $(gamma, alpha, beta)$ doesn't work because $beta prec_(y,epsilon) gamma$. TODO: to explain this better I think
-we need 4 lines...
-
-#cetz.canvas({
-  import cetz.draw: *
-
-  content((-6, 2), $alpha$, anchor: "south", padding: 2pt)
-  line((-7, 2), (3, -2), stroke: (dash: "dashed", thickness: 0.2pt))
-  line((-5, 2), (5, -2), stroke: (dash: "dashed", thickness: 0.2pt))
-  line((-6, 2), (4, -2), name: "a")
-
-  content((5, 2), $gamma$, anchor: "south", padding: 2pt)
-  line((6, 2), (-3, -2), stroke: (dash: "dashed", thickness: 0.2pt))
-  line((4, 2), (-5, -2), stroke: (dash: "dashed", thickness: 0.2pt))
-  line((5, 2), (-4, -2), name: "a")
-
-  content((-1, 2), $beta$, anchor: "south", padding: 2pt)
-  line((-1.3, 2), (-1.3, -2), stroke: (dash: "dashed", thickness: 0.2pt))
-  line((-1, 2), (-1, -2))
-  line((-0.7, 2), (-0.7, -2), stroke: (dash: "dashed", thickness: 0.2pt))
-
-  line((-5, 0.05), (5, 0.05), stroke: (dash: "dotted", thickness: 0.5pt))
-  content((-5, 0.05), $y$, anchor: "east", padding: 2pt)
-})
-
+- important heights are where the sweep-line order changes *or* there's some enter/exit that's within $epsilon$ of
+  an existing line
+- first do a dense version, where we insert points for every segment at every important height
+- the "old" sweep line tells us where we need horizontal segments
