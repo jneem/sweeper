@@ -147,6 +147,10 @@ impl<F: Float> Bounds<F> {
     pub fn le(&self, other: &F) -> bool {
         self.upper <= *other
     }
+
+    pub fn mid(&self) -> F {
+        (self.lower.clone() + &self.upper) / F::from_f32(2.0)
+    }
 }
 
 impl<F: Float> std::ops::Add<Bounds<F>> for Bounds<F> {
@@ -187,14 +191,37 @@ impl<F: Float> std::ops::Div<Bounds<F>> for Bounds<F> {
 
         if denom.upper < zero {
             Bounds {
-                lower: self.lower / denom.lower,
-                upper: self.upper / denom.upper,
+                lower: (self.lower / denom.lower).next_down(),
+                upper: (self.upper / denom.upper).next_up(),
             }
         } else {
             Bounds {
-                lower: self.lower / denom.upper,
-                upper: self.upper / denom.lower,
+                lower: (self.lower / denom.upper).next_down(),
+                upper: (self.upper / denom.lower).next_up(),
             }
+        }
+    }
+}
+
+impl<F: Float> std::ops::Mul<Bounds<F>> for Bounds<F> {
+    type Output = Bounds<F>;
+
+    fn mul(self, other: Bounds<F>) -> Bounds<F> {
+        // We could avoid some multiplications by a case analysis (checking
+        // which parts are negative). But performance isn't  a goal here.
+        let a = self.lower.clone() * other.lower.clone();
+        let b = self.lower * other.upper.clone();
+        let c = self.upper.clone() * other.lower;
+        let d = self.upper * other.upper;
+
+        Bounds {
+            upper: a
+                .clone()
+                .max(b.clone())
+                .max(c.clone())
+                .max(d.clone())
+                .next_up(),
+            lower: a.min(b).min(c).min(d).next_down(),
         }
     }
 }

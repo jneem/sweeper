@@ -146,7 +146,8 @@ impl<F: Float> Segment<F> {
     }
 
     /// Returns the y-coordinate of the intersection between this segment and the other, if
-    /// there is one and we can get an accurate estimate of it.
+    /// there is one and we can get an accurate estimate of it. Assumes that `self` starts
+    /// off roughly to the left of `other`.
     ///
     /// We guarantee that if this returns a y value, the two line segments have approximately
     /// the same x-coordinate (within eps/2) at that y value.
