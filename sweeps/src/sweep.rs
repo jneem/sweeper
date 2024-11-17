@@ -159,16 +159,34 @@ pub struct SweepLine<F: Float> {
     pub segs: Vec<SweepLineEntry<F>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SweepLineEntry<F: Float> {
-    pub idx: SegIdx,
     pub x: SweepLineSeg<F>,
+    pub idx: SegIdx,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SweepLineSeg<F: Float> {
     Single(F),
+    // FIXME: what is the meaning of the order here? I think it's with respect to the y ordering
+    // and not the original orientation. That is, the enter coordinate is the one that
+    // should be connected to the sweep line with smaller y, and the exit coordinate should
+    // be connected to the sweep line with larger y.
     EnterExit(F, F),
+}
+
+impl<F: Float> PartialOrd for SweepLineSeg<F> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<F: Float> Ord for SweepLineSeg<F> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.smaller_x()
+            .cmp(other.smaller_x())
+            .then_with(|| self.larger_x().cmp(other.larger_x()))
+    }
 }
 
 impl<F: Float> SweepLine<F> {
@@ -195,6 +213,20 @@ impl<F: Float> SweepLineSeg<F> {
                     y
                 }
             }
+        }
+    }
+
+    pub fn smaller_x(&self) -> &F {
+        match self {
+            SweepLineSeg::Single(x) => x,
+            SweepLineSeg::EnterExit(x, y) => x.min(y),
+        }
+    }
+
+    pub fn larger_x(&self) -> &F {
+        match self {
+            SweepLineSeg::Single(x) => x,
+            SweepLineSeg::EnterExit(x, y) => x.max(y),
         }
     }
 }
