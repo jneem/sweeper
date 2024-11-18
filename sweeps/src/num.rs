@@ -140,6 +140,13 @@ impl<F: Float> Bounds<F> {
         }
     }
 
+    pub fn min(self, high: F) -> Self {
+        Self {
+            lower: self.lower.min(high.clone()),
+            upper: self.upper.min(high),
+        }
+    }
+
     pub fn ge(&self, other: &F) -> bool {
         self.lower >= *other
     }

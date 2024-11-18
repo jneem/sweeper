@@ -99,6 +99,14 @@ impl<F: Float> Segments<F> {
         }
     }
 
+    pub fn oriented_end(&self, idx: SegIdx) -> &Point<F> {
+        if self.orientation[idx.0] {
+            &self.get(idx).end
+        } else {
+            &self.get(idx).start
+        }
+    }
+
     pub fn from_closed_cycle<P: Into<Point<F>>>(ps: impl IntoIterator<Item = P>) -> Self {
         fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
             xs.windows(2)

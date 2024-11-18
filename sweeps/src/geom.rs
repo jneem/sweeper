@@ -190,6 +190,10 @@ impl<F: Float> Segment<F> {
             end: self.end.to_exact(),
         }
     }
+
+    pub fn is_horizontal(&self) -> bool {
+        self.start.y == self.end.y
+    }
 }
 
 impl Segment<Rational> {
