@@ -4,7 +4,17 @@
 //!
 //! TODO: I think in this algorithm it makes sense to put Exit events first.
 
-use std::{cmp::Reverse, collections::HashMap};
+// TODO:
+// - svg input/output for visualization
+// - sparse subdivisions
+// - better heuristic for horizontal positions, that avoids small horizontal lines at simple intersections
+// - investigate better insertion heuristics: if there are a bunch of insertions at the same point, we
+//   currently put them in some arbitrary order and then later have to process a bunch of intersections
+
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, HashMap, HashSet},
+};
 
 use crate::{
     geom::Segment,
@@ -18,9 +28,9 @@ use crate::{
 pub struct WeakSweepLine<F: Float> {
     pub y: F,
     pub segs: Vec<SegIdx>,
-    // A list of segments (possibly with duplicates) that changed their relative orders
+    // The set of segments that changed their relative orders
     // since the last sweep line.
-    pub segs_that_changed_order: Vec<SegIdx>,
+    pub segs_that_changed_order: HashSet<SegIdx>,
 }
 
 impl<F: Float> WeakSweepLine<F> {
@@ -28,7 +38,7 @@ impl<F: Float> WeakSweepLine<F> {
         Self {
             y,
             segs: Vec::new(),
-            segs_that_changed_order: Vec::new(),
+            segs_that_changed_order: HashSet::new(),
         }
     }
 }
@@ -74,22 +84,16 @@ impl<F: Float> State<F> {
             let other = self.segments.get(self.line.segs[j]);
             height_bound = height_bound.min(other.end.y.clone());
             // In the write-up, we check whether `seg` crosses the upper bound
-            // of `other`, and we aren't allowed to have false negatives. Here
-            // we'll just find the intersections of the center-lines, and assume
-            // we're accurate enough that
-            // - we're always epsilon-close at the computed intersection point, and
-            // - if `seg` truly crosses the upper bound of `other` then we
-            //   always find an intersection.
+            // of `other`, and we aren't allowed to have false negatives.
+            let crosses = other.end_offset(seg) >= self.eps.clone() / F::from_f32(2.0);
+            let crosses =
+                crosses || seg.at_y(y) >= other.at_y(y) + self.eps.clone() / F::from_f32(2.0);
 
-            let int_y = if seg.at_y(y) >= other.at_y(y) {
-                Some(y.clone())
-            } else {
-                // TODO: we can probably use an approximate intersection without interval
-                // arithmetic.
-                seg.approx_intersection_y(other).map(|bounds| bounds.mid())
-            };
-
-            if let Some(int_y) = int_y {
+            if crosses {
+                let int_y = seg
+                    .approx_intersection_y(other)
+                    .map(|bounds| bounds.mid())
+                    .unwrap_or_else(|| y.clone());
                 // TODO: justify the second condition
                 if int_y <= height_bound
                     && seg.end_offset(other) * F::from_f32(-2.0) >= self.eps.clone()
@@ -124,13 +128,16 @@ impl<F: Float> State<F> {
         for j in (0..start_idx).rev() {
             let other = self.segments.get(self.line.segs[j]);
             height_bound = height_bound.min(other.end.y.clone());
-            let int_y = if seg.at_y(y) <= other.at_y(y) {
-                Some(y.clone())
-            } else {
-                other.approx_intersection_y(seg).map(|bounds| bounds.mid())
-            };
+            let crosses = seg.end_offset(other) >= self.eps.clone() / F::from_f32(2.0);
+            let crosses =
+                crosses || seg.at_y(y) <= other.at_y(y) - self.eps.clone() / F::from_f32(2.0);
 
-            if let Some(int_y) = int_y {
+            if crosses {
+                let int_y = other
+                    .approx_intersection_y(seg)
+                    .map(|bounds| bounds.mid())
+                    .unwrap_or_else(|| y.clone());
+
                 if int_y <= height_bound
                     && seg.end_offset(other) * F::from_f32(2.0) >= self.eps.clone()
                 {
@@ -194,7 +201,7 @@ impl<F: Float> State<F> {
                 if left_idx < right_idx {
                     self.line
                         .segs_that_changed_order
-                        .extend_from_slice(&self.line.segs[left_idx..=right_idx]);
+                        .extend(&self.line.segs[left_idx..=right_idx]);
                     let left_seg = self.segments.get(left);
                     let eps = &self.eps;
                     let y = &self.line.y;
@@ -459,45 +466,66 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLine<F>>
     ret
 }
 
-/// Adds to this sweep-line all horizontal segments that belong in it.
-fn add_horizontals_to_sweep_line<F: Float>(
-    line: &mut SweepLine<F>,
-    horizontals: &[SegIdx],
-    segments: &Segments<F>,
-) {
-    // `horizontals` are sorted by y coordinate, so find the subrange that's at our current y
-    let start_idx = horizontals.partition_point(|s| segments.get(*s).start.y >= line.y);
-    let end_idx = horizontals.partition_point(|s| segments.get(*s).start.y > line.y);
+/// A collection of horizontal lines. The main part of our algorithm doesn't
+/// handle horizontal lines, so we remove them from the "line soup" and then
+/// sneak them back in while we're actually creating the sweep-lines.
+struct Horizontals<F: Float> {
+    segs: BTreeMap<F, Vec<SegIdx>>,
+}
 
-    if end_idx < start_idx {
-        return;
+impl<F: Float> Horizontals<F> {
+    fn new(segments: &Segments<F>) -> Self {
+        let mut segs = BTreeMap::<F, Vec<SegIdx>>::new();
+        for idx in segments.indices() {
+            let seg = segments.get(idx);
+            if seg.is_horizontal() {
+                segs.entry(seg.start.y.clone()).or_default().push(idx);
+            }
+        }
+
+        Self { segs }
     }
 
-    for &idx in &horizontals[start_idx..end_idx] {
-        let seg = segments.get(idx);
+    fn horizontals_at_y<'a>(&'a self, y: &F) -> impl Iterator<Item = SegIdx> + 'a {
+        self.segs
+            .get(y)
+            .map_or(&[][..], |x| x.as_slice())
+            .iter()
+            .copied()
+    }
 
-        line.segs.push(SweepLineEntry {
-            x: SweepLineSeg::EnterExit(
-                seg.start.x.clone().min(seg.end.x.clone()),
-                seg.start.x.clone().max(seg.end.x.clone()),
-            ),
-            idx,
-        });
+    /// Adds to this sweep-line all horizontal segments that belong in it.
+    fn add_to_sweep_line(&self, line: &mut SweepLine<F>, segments: &Segments<F>) {
+        for idx in self.horizontals_at_y(&line.y) {
+            let seg = segments.get(idx);
+
+            line.segs.push(SweepLineEntry {
+                x: SweepLineSeg::EnterExit(
+                    seg.start.x.clone().min(seg.end.x.clone()),
+                    seg.start.x.clone().max(seg.end.x.clone()),
+                ),
+                idx,
+            });
+        }
+    }
+
+    /// Marks as re-ordered all segments in the weakly-ordered sweep line that
+    /// might intersect any horizontal segment.
+    fn add_reorders(&self, weak: &mut WeakSweepLine<F>, segments: &Segments<F>) {
+        todo!()
     }
 }
 
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
 /// of actual sweep lines, in the naivest possibly way: subdividing every
 /// segment at every sweep line.
-///
-/// We don't currently handle horizontal segments.
 pub fn weaks_to_sweeps_dense<F: Float>(
     weaks: &[WeakSweepLine<F>],
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
     // The first sweep-line just has a single entry for everything
-    let mut ret = vec![SweepLine {
+    let mut first_line = SweepLine {
         y: weaks[0].y.clone(),
         segs: weaks[0]
             .ordered_xs(segments, eps)
@@ -506,13 +534,14 @@ pub fn weaks_to_sweeps_dense<F: Float>(
                 x: SweepLineSeg::Single(x),
             })
             .collect(),
-    }];
+    };
 
-    let mut horizontals: Vec<_> = segments
-        .indices()
-        .filter(|&idx| segments.get(idx).is_horizontal())
-        .collect();
-    horizontals.sort_by(|s, t| segments.get(*s).start.y.cmp(&segments.get(*t).start.y));
+    // FIXME: our handling of horizontals is not complete, because we
+    // only handle them if they have the same height as some already-detected sweep-line.
+    let horizontals = Horizontals::new(segments);
+    horizontals.add_to_sweep_line(&mut first_line, segments);
+
+    let mut ret = vec![first_line];
 
     let mut prev = weaks[0].clone();
     for line in &weaks[1..] {
@@ -549,7 +578,7 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             y: prev.y,
             segs: entries,
         };
-        add_horizontals_to_sweep_line(&mut sweep_line, &horizontals, segments);
+        horizontals.add_to_sweep_line(&mut sweep_line, segments);
         sweep_line.segs.sort();
         ret.push(sweep_line);
 
@@ -557,6 +586,16 @@ pub fn weaks_to_sweeps_dense<F: Float>(
     }
 
     ret
+}
+
+/// Converts a sequence of weakly-ordered sweep lines into a sequence
+/// of actual sweep lines, while trying not to add in two many subdivisions.
+pub fn weaks_to_sweeps_sparse<F: Float>(
+    weaks: &[WeakSweepLine<F>],
+    segments: &Segments<F>,
+    eps: &F,
+) -> Vec<SweepLine<F>> {
+    todo!()
 }
 
 #[cfg(test)]
@@ -600,7 +639,7 @@ mod tests {
             let line = WeakSweepLine {
                 y,
                 segs: (0..xs.len()).map(SegIdx).collect(),
-                segs_that_changed_order: Vec::new(),
+                segs_that_changed_order: HashSet::new(),
             };
 
             line.find_invalid_order(&segs, &eps)
@@ -657,7 +696,7 @@ mod tests {
             let line = WeakSweepLine {
                 y,
                 segs: (0..xs.len()).map(SegIdx).collect(),
-                segs_that_changed_order: Vec::new(),
+                segs_that_changed_order: HashSet::new(),
             };
             line.insertion_idx(&segs, &new, &eps)
         }
@@ -752,6 +791,19 @@ mod tests {
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
+    }
+
+    #[test]
+    fn test_bug() {
+        let perturbations = vec![Perturbation::Point {
+            perturbation: crate::perturbation::PointPerturbation {
+                x: crate::perturbation::F64Perturbation::Ulp(1),
+                y: crate::perturbation::F64Perturbation::Ulp(-1),
+            },
+            idx: 2354958874096191725,
+            next: Box::new(crate::perturbation::Perturbation::Base { idx: 0 }),
+        }];
+        run_perturbation(perturbations);
     }
 
     proptest! {
