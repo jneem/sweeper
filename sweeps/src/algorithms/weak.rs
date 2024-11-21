@@ -510,8 +510,31 @@ impl<F: Float> Horizontals<F> {
 
     /// Marks as re-ordered all segments in the weakly-ordered sweep line that
     /// might intersect any horizontal segment.
-    fn add_reorders(&self, weak: &mut WeakSweepLine<F>, segments: &Segments<F>) {
-        todo!()
+    fn add_reorders(&self, weak: &mut WeakSweepLine<F>, segments: &Segments<F>, eps: &F) {
+        for h_idx in self.horizontals_at_y(&weak.y) {
+            let h_seg = segments.get(h_idx);
+
+            // If there's a segment whose upper bound is less than seg.start.x, we
+            // can ignore all it and everything to its left (even if those things to
+            // its left have a bigger upper bound).
+            //
+            // Like in `WeakSweepLine::insertion_idx`, we're abusing the guarantees of
+            // the stdlib binary search: the segments aren't guaranteed to be ordered,
+            // but this should still find some index that evaluated to false, but whose
+            // predecessor evaluated to true.
+            let start_idx = weak.segs.partition_point(|idx| {
+                segments.get(*idx).upper_bound(&weak.y, eps).upper < h_seg.start.x
+            });
+
+            for idx in &weak.segs[start_idx..] {
+                // We can stop once we've found a segment whose lower bound is definitely
+                // past the horizontal segment.
+                if segments.get(*idx).lower_bound(&weak.y, eps).lower > h_seg.end.y {
+                    break;
+                }
+                weak.segs_that_changed_order.insert(*idx);
+            }
+        }
     }
 }
 
