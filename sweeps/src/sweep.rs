@@ -139,6 +139,12 @@ impl<F: Float> Segments<F> {
         if closed {
             self.contour_prev[old_len] = Some(SegIdx(self.segs.len() - 1));
             *self.contour_next.last_mut().unwrap() = Some(SegIdx(old_len));
+        } else {
+            // Yuck
+            self.segs.pop();
+            self.orientation.pop();
+            self.contour_prev.pop();
+            self.contour_next.pop();
         }
     }
 

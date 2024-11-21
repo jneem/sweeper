@@ -538,6 +538,59 @@ impl<F: Float> Horizontals<F> {
     }
 }
 
+/// Given a sequence of weak sweep lines, ensures that there are sweep lines at certain heights.
+/// If there aren't already sweep-lines there, add some.
+///
+/// TODO: this could be written lazily, instead of reallocating everything.
+fn add_sweep_lines_at_ys<F: Float>(
+    weaks: &[WeakSweepLine<F>],
+    mut ys: impl Iterator<Item = F>,
+) -> Vec<WeakSweepLine<F>> {
+    let mut next_y = ys.next();
+    let mut weaks = weaks.iter().cloned();
+    let mut next_weak = weaks.next();
+
+    let mut ret = Vec::new();
+    loop {
+        match (next_y, next_weak) {
+            (None, None) => break,
+            (None, Some(w)) => {
+                ret.push(w);
+                next_weak = weaks.next();
+                next_y = None;
+            }
+            (Some(y), None) => {
+                ret.push(WeakSweepLine::new(y));
+                next_y = ys.next();
+                next_weak = None;
+            }
+            (Some(y), Some(w)) =>
+            {
+                #[allow(clippy::comparison_chain)]
+                if y < w.y {
+                    let mut duped_line =
+                        ret.last().cloned().unwrap_or(WeakSweepLine::new(y.clone()));
+                    duped_line.y = y;
+                    ret.push(duped_line);
+
+                    next_y = ys.next();
+                    next_weak = Some(w);
+                } else if y == w.y {
+                    ret.push(w);
+                    next_y = ys.next();
+                    next_weak = weaks.next();
+                } else {
+                    ret.push(w);
+                    next_y = Some(y);
+                    next_weak = weaks.next();
+                }
+            }
+        }
+    }
+
+    ret
+}
+
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
 /// of actual sweep lines, in the naivest possibly way: subdividing every
 /// segment at every sweep line.
@@ -546,6 +599,12 @@ pub fn weaks_to_sweeps_dense<F: Float>(
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
+    let horizontals = Horizontals::new(segments);
+
+    // We took the horizontals out before constructing the weak sweep lines, so
+    // ensure that there's a sweep line present at every horizontal line also.
+    let weaks = add_sweep_lines_at_ys(weaks, horizontals.segs.keys().cloned());
+
     // The first sweep-line just has a single entry for everything
     let mut first_line = SweepLine {
         y: weaks[0].y.clone(),
@@ -558,9 +617,6 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             .collect(),
     };
 
-    // FIXME: our handling of horizontals is not complete, because we
-    // only handle them if they have the same height as some already-detected sweep-line.
-    let horizontals = Horizontals::new(segments);
     horizontals.add_to_sweep_line(&mut first_line, segments);
 
     let mut ret = vec![first_line];
@@ -769,6 +825,50 @@ mod tests {
         dbg!(&lines);
         assert_eq!(4, lines.len());
         dbg!(&weaks_to_sweeps_dense(&lines, &segs, &eps));
+    }
+
+    #[test]
+    fn test_sweep_with_horizontals() {
+        let eps = NotNan::new(0.01).unwrap();
+        let h = |y: f64| -> [Point<NotNan<f64>>; 2] {
+            [
+                Point::new(
+                    NotNan::try_from(-10.0).unwrap(),
+                    NotNan::try_from(y).unwrap(),
+                ),
+                Point::new(
+                    NotNan::try_from(10.0).unwrap(),
+                    NotNan::try_from(y).unwrap(),
+                ),
+            ]
+        };
+
+        let segs = mk_segs(&[(0.0, 0.0), (1.0, 1.0), (-2.0, 2.0)]);
+
+        let mut segs1 = segs.clone();
+        segs1.add_points(h(-5.0), false);
+        let lines = sweep(&segs1, &eps);
+        let lines = &weaks_to_sweeps_dense(&lines, &segs1, &eps);
+        // TODO: maybe snapshot tests?
+        assert_eq!(lines.len(), 5);
+        dbg!(&lines);
+
+        let mut segs2 = segs.clone();
+        segs2.add_points(h(0.75), false);
+        let lines = sweep(&segs2, &eps);
+        let lines = &weaks_to_sweeps_dense(&lines, &segs2, &eps);
+        // TODO: maybe snapshot tests?
+        assert_eq!(lines.len(), 5);
+        dbg!(&lines);
+
+        let mut segs3 = segs.clone();
+        segs3.add_points(h(1.0), false);
+        segs3.add_points(h(2.0), false);
+        let lines = sweep(&segs3, &eps);
+        let lines = &weaks_to_sweeps_dense(&lines, &segs3, &eps);
+        // TODO: maybe snapshot tests?
+        assert_eq!(lines.len(), 5);
+        dbg!(&lines);
     }
 
     fn p<F: Float>(x: f32, y: f32) -> Point<F> {
