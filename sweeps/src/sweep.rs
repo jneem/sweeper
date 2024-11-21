@@ -82,6 +82,12 @@ impl<F: Float> Default for Segments<F> {
     }
 }
 
+fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    xs.windows(2)
+        .map(|pair| (&pair[0], &pair[1]))
+        .chain(xs.last().zip(xs.first()))
+}
+
 impl<F: Float> Segments<F> {
     pub fn get(&self, idx: SegIdx) -> &Segment<F> {
         &self.segs[idx.0]
@@ -89,6 +95,10 @@ impl<F: Float> Segments<F> {
 
     pub fn indices(&self) -> impl Iterator<Item = SegIdx> {
         (0..self.segs.len()).map(SegIdx)
+    }
+
+    pub fn segments(&self) -> impl Iterator<Item = &Segment<F>> {
+        self.segs.iter()
     }
 
     pub fn oriented_start(&self, idx: SegIdx) -> &Point<F> {
@@ -107,28 +117,34 @@ impl<F: Float> Segments<F> {
         }
     }
 
-    pub fn from_closed_cycle<P: Into<Point<F>>>(ps: impl IntoIterator<Item = P>) -> Self {
-        fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
-            xs.windows(2)
-                .map(|pair| (&pair[0], &pair[1]))
-                .chain(xs.last().zip(xs.first()))
-        }
+    pub fn add_points<P: Into<Point<F>>>(&mut self, ps: impl IntoIterator<Item = P>, closed: bool) {
+        let old_len = self.segs.len();
 
         let ps: Vec<_> = ps.into_iter().map(|p| p.into()).collect();
-        let mut ret = Self::default();
+        if ps.len() <= 1 {
+            return;
+        }
+
         for (p, q) in cyclic_pairs(&ps) {
             let (a, b, orient) = if p < q { (p, q, true) } else { (q, p, false) };
-            ret.segs.push(Segment {
+            self.segs.push(Segment {
                 start: a.clone(),
                 end: b.clone(),
             });
-            ret.orientation.push(orient);
-            ret.contour_prev
-                .push(Some(SegIdx(ret.segs.len().saturating_sub(2))));
-            ret.contour_next.push(Some(SegIdx(ret.segs.len())));
+            self.orientation.push(orient);
+            self.contour_prev
+                .push(Some(SegIdx(self.segs.len().saturating_sub(2))));
+            self.contour_next.push(Some(SegIdx(self.segs.len())));
         }
-        ret.contour_prev[0] = Some(SegIdx(ret.segs.len() - 1));
-        *ret.contour_next.last_mut().unwrap() = Some(SegIdx(0));
+        if closed {
+            self.contour_prev[old_len] = Some(SegIdx(self.segs.len() - 1));
+            *self.contour_next.last_mut().unwrap() = Some(SegIdx(old_len));
+        }
+    }
+
+    pub fn from_closed_cycle<P: Into<Point<F>>>(ps: impl IntoIterator<Item = P>) -> Self {
+        let mut ret = Self::default();
+        ret.add_points(ps, true);
         ret
     }
 }

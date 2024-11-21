@@ -5,7 +5,6 @@
 //! TODO: I think in this algorithm it makes sense to put Exit events first.
 
 // TODO:
-// - svg input/output for visualization
 // - sparse subdivisions
 // - better heuristic for horizontal positions, that avoids small horizontal lines at simple intersections
 // - investigate better insertion heuristics: if there are a bunch of insertions at the same point, we
