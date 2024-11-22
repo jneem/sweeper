@@ -10,6 +10,7 @@
 // - investigate better insertion heuristics: if there are a bunch of insertions at the same point, we
 //   currently put them in some arbitrary order and then later have to process a bunch of intersections
 
+use std::ops::Range;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashMap, HashSet},
@@ -186,6 +187,7 @@ impl<F: Float> State<F> {
                 let new_seg = self.segments.get(seg_idx);
                 let pos = self.line.insertion_idx(&self.segments, new_seg, &self.eps);
                 self.insert(pos, seg_idx);
+                self.line.segs_that_changed_order.insert(seg_idx);
             }
             SweepEventKind::Exit(seg_idx) => {
                 let pos = self
@@ -193,6 +195,7 @@ impl<F: Float> State<F> {
                     .position(seg_idx)
                     .expect("exit for a segment we don't have");
                 self.remove(pos);
+                self.line.segs_that_changed_order.insert(seg_idx);
             }
             SweepEventKind::Intersection { left, right } => {
                 let left_idx = self.line.segs.iter().position(|&x| x == left).unwrap();
@@ -397,6 +400,42 @@ impl<F: Float> WeakSweepLine<F> {
         self.segs.iter().position(|&x| x == seg)
     }
 
+    // If this segment is in our line, find the subrange of our line that could possibly
+    // influence `seg`'s position.
+    fn influence_range(
+        &self,
+        seg: SegIdx,
+        segments: &Segments<F>,
+        eps: &F,
+    ) -> Option<Range<usize>> {
+        let idx = self.position(seg)?;
+        let mut start_idx = idx;
+        let mut running_min = segments.get(seg).lower_bound(&self.y, eps).lower;
+
+        for i in (0..idx).rev() {
+            let prev_seg = segments.get(self.segs[i]);
+            if prev_seg.upper_bound(&self.y, eps).upper < running_min {
+                break;
+            } else {
+                running_min = running_min.min(prev_seg.lower_bound(&self.y, eps).lower);
+                start_idx = i;
+            }
+        }
+
+        let mut end_idx = idx + 1;
+        let mut running_max = segments.get(seg).upper_bound(&self.y, eps).upper;
+        for i in (idx + 1)..self.segs.len() {
+            let next_seg = segments.get(self.segs[i]);
+            if next_seg.lower_bound(&self.y, eps).lower > running_max {
+                break;
+            } else {
+                running_max = running_max.max(next_seg.upper_bound(&self.y, eps).upper);
+                end_idx = i + 1;
+            }
+        }
+        Some(start_idx..end_idx)
+    }
+
     /// Return all the segments in this sweep-line, along with a valid x position.
     ///
     /// TODO: this returns the smallest possible valid x position, which is correct but leads
@@ -417,6 +456,33 @@ impl<F: Float> WeakSweepLine<F> {
             .unwrap_or(F::from_f32(0.0));
 
         self.segs.iter().map(move |seg_idx| {
+            let x = segments.get(*seg_idx).lower(&self.y, eps);
+            max_so_far = max_so_far.clone().max(x);
+            (*seg_idx, max_so_far.clone())
+        })
+    }
+
+    /// Return a slice of segments in this sweep-line, along with a valid x position.
+    ///
+    /// TODO: this returns the smallest possible valid x position, which is correct but leads
+    /// to weird output, with unnecessary horizontal segments. We can probably find a heuristic
+    /// to improve this. (Like maybe also calculating the largest possible valid x position,
+    /// and then choosing something in between.)
+    fn ordered_partial_xs<'a>(
+        &'a self,
+        range: Range<usize>,
+        segments: &'a Segments<F>,
+        eps: &'a F,
+    ) -> impl Iterator<Item = (SegIdx, F)> + 'a {
+        let segs = &self.segs[range];
+        let mut max_so_far = segs
+            .first()
+            .map(|seg| segments.get(*seg).lower(&self.y, eps))
+            // If `self.segs` is empty our y doesn't matter; we're going to return
+            // an empty iterator.
+            .unwrap_or(F::from_f32(0.0));
+
+        segs.iter().map(move |seg_idx| {
             let x = segments.get(*seg_idx).lower(&self.y, eps);
             max_so_far = max_so_far.clone().max(x);
             (*seg_idx, max_so_far.clone())
@@ -673,7 +739,95 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
-    todo!()
+    dbg!(weaks);
+    let horizontals = Horizontals::new(segments);
+
+    // We took the horizontals out before constructing the weak sweep lines, so
+    // ensure that there's a sweep line present at every horizontal line also.
+    let mut weaks = add_sweep_lines_at_ys(weaks, horizontals.segs.keys().cloned());
+    horizontals.add_reorders(&mut weaks[0], segments, eps);
+
+    // The first sweep-line just has a single entry for everything
+    let mut first_line = SweepLine {
+        y: weaks[0].y.clone(),
+        segs: weaks[0]
+            .ordered_xs(segments, eps)
+            .map(|(idx, x)| SweepLineEntry {
+                idx,
+                x: SweepLineSeg::Single(x),
+            })
+            .collect(),
+    };
+
+    horizontals.add_to_sweep_line(&mut first_line, segments);
+
+    let mut ret = vec![first_line];
+
+    let mut prev = weaks[0].clone();
+    for line in &mut weaks[1..] {
+        dbg!(&line);
+        horizontals.add_reorders(line, segments, eps);
+        let segs: Vec<_> = line.segs_that_changed_order.iter().cloned().collect();
+        dbg!(&segs);
+        let mut processed_segs = HashSet::new();
+
+        let mut entries = HashMap::new();
+        prev.y = line.y.clone();
+        for &seg in &segs {
+            if processed_segs.contains(&seg) {
+                continue;
+            }
+            if let Some(range) = prev.influence_range(seg, segments, eps) {
+                entries.extend(
+                    prev.ordered_partial_xs(range.clone(), segments, eps)
+                        .map(|(idx, x)| (idx, SweepLineSeg::Single(x))),
+                );
+                processed_segs.extend(prev.segs[range].iter().cloned());
+            }
+        }
+
+        let mut processed_segs = HashSet::new();
+        for &seg in &segs {
+            if processed_segs.contains(&seg) {
+                continue;
+            }
+
+            let Some(range) = line.influence_range(seg, segments, eps) else {
+                continue;
+            };
+            for (idx, x) in line.ordered_partial_xs(range.clone(), segments, eps) {
+                match entries.entry(idx) {
+                    std::collections::hash_map::Entry::Occupied(mut occ) => {
+                        let SweepLineSeg::Single(enter_x) = occ.get().clone() else {
+                            unreachable!()
+                        };
+                        *occ.get_mut() = SweepLineSeg::EnterExit(enter_x, x);
+                    }
+                    std::collections::hash_map::Entry::Vacant(vac) => {
+                        vac.insert(SweepLineSeg::Single(x));
+                    }
+                }
+            }
+            processed_segs.extend(line.segs[range].iter().cloned());
+        }
+
+        let entries: Vec<_> = entries
+            .into_iter()
+            .map(|(idx, x)| SweepLineEntry { idx, x })
+            .collect();
+
+        let mut sweep_line = SweepLine {
+            y: prev.y,
+            segs: entries,
+        };
+        horizontals.add_to_sweep_line(&mut sweep_line, segments);
+        sweep_line.segs.sort();
+        ret.push(sweep_line);
+
+        prev = line.clone();
+    }
+
+    ret
 }
 
 #[cfg(test)]

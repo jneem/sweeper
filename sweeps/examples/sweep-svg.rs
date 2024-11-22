@@ -17,6 +17,9 @@ struct Args {
 
     #[arg(long)]
     epsilon: Option<f64>,
+
+    #[arg(long)]
+    dense: bool,
 }
 
 fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
@@ -90,7 +93,11 @@ pub fn main() -> anyhow::Result<()> {
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
     let weak_lines = sweeps::algorithms::weak::sweep(&segments, &eps);
-    let sweep_lines = sweeps::algorithms::weak::weaks_to_sweeps_dense(&weak_lines, &segments, &eps);
+    let sweep_lines = if args.dense {
+        sweeps::algorithms::weak::weaks_to_sweeps_dense(&weak_lines, &segments, &eps)
+    } else {
+        sweeps::algorithms::weak::weaks_to_sweeps_sparse(&weak_lines, &segments, &eps)
+    };
 
     // I tried using `tree.root().abs_bounding_box()`, but I don't understand the output.
     let ys: Vec<_> = segments
