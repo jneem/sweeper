@@ -5,7 +5,6 @@
 //! TODO: I think in this algorithm it makes sense to put Exit events first.
 
 // TODO:
-// - sparse subdivisions
 // - better heuristic for horizontal positions, that avoids small horizontal lines at simple intersections
 // - investigate better insertion heuristics: if there are a bunch of insertions at the same point, we
 //   currently put them in some arbitrary order and then later have to process a bunch of intersections
@@ -16,6 +15,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
 };
 
+use crate::geom::Point;
 use crate::{
     geom::Segment,
     num::{Bounds, Float},
@@ -771,7 +771,6 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
-    dbg!(weaks);
     let horizontals = Horizontals::new(segments);
 
     // We took the horizontals out before constructing the weak sweep lines, so
@@ -858,6 +857,75 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
     }
 
     ret
+}
+
+/// A sweep line position gets associated each time that a segment appears in
+/// a sweep line event.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SweepLinePosition {
+    /// Out of all the events associated to this segment in this sweep line,
+    /// this one is the first in the segment's orientation.
+    First,
+    Mid,
+    /// Out of all the events associated to this segment in this sweep line,
+    /// this one is the last in the segment's orientation.
+    Last,
+    // TODO: should we have an `Only` variant for segments that only hit
+    // the sweep line once? Currently we use `First` or `Last` for this case.
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputEvent<F: Float> {
+    seg: SegIdx,
+    point: Point<F>,
+    line_position: SweepLinePosition,
+}
+
+/// Converts a sequence of weakly-ordered sweep lines into a sequence
+/// of actual sweep lines, while trying not to add in two many subdivisions.
+///
+/// TODO: I started this, but I think it will be easier with a refactored
+/// weak sweep structure. If we snapshot the line (1) after the enter events,
+/// and (2) after the intersection events but before the exit events, then
+/// the indices between the two snapshots will line up, and make it easier
+/// to do the sparse processing to both lines at once.
+pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
+    weaks: &[WeakSweepLine<F>],
+    segments: &Segments<F>,
+    eps: &F,
+    mut callback: C,
+) {
+    let horizontals = Horizontals::new(segments);
+
+    // We took the horizontals out before constructing the weak sweep lines, so
+    // ensure that there's a sweep line present at every horizontal line also.
+    let weaks = add_sweep_lines_at_ys(weaks, horizontals.segs.keys().cloned());
+
+    // The y position here doesn't matter because the previous line is empty, so just
+    // make it something arbitrary but strictly before the first line.
+    let mut prev_weak = WeakSweepLine::new(weaks[0].y.clone() - F::from_f32(1.0));
+
+    for mut weak in weaks {
+        // TODO: try to do this lazily also.
+        horizontals.add_reorders(&mut weak, segments, eps);
+
+        struct HSeg<F: Float> {
+            start: F,
+            end: F,
+            positively_oriented: bool,
+            seg: SegIdx,
+        }
+        let mut active_horizontals: Vec<HSeg<F>> = Vec::new();
+
+        let segs: Vec<_> = weak.segs_needing_positions.iter().cloned().collect();
+        //let mut processed_segs = HashSet::new();
+
+        // Take a look at the previous order, but at the current height.
+        prev_weak.y = weak.y.clone();
+        for seg in &segs {}
+
+        prev_weak = weak;
+    }
 }
 
 #[cfg(test)]
