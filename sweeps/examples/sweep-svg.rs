@@ -113,7 +113,7 @@ pub fn main() -> anyhow::Result<()> {
     let min_y = ys.iter().min().unwrap().into_inner();
     let max_y = ys.iter().max().unwrap().into_inner();
     let pad = 1.0;
-    let stroke_width = (max_y - min_y).max(max_x - max_y) / 1024.0;
+    let stroke_width = (max_y - min_y).max(max_x - max_y) / 512.0;
     let dot_radius = stroke_width * 1.5;
     let mut document = svg::Document::new().set(
         "viewBox",
@@ -174,7 +174,6 @@ pub fn main() -> anyhow::Result<()> {
                     last_exit.insert(entry.idx, (x.into_inner(), y));
                 }
                 sweeps::sweep::SweepLineSeg::EnterExit(x0, x1) => {
-                    // TODO: draw a line from its previous exit to x1
                     let c0 = svg::node::element::Circle::new()
                         .set("r", dot_radius)
                         .set("cy", y)
