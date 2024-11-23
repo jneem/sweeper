@@ -65,9 +65,10 @@ impl<F: Float> std::fmt::Debug for SweepEvent<F> {
 pub struct Segments<F: Float> {
     // TODO: make fields private; provide accessors and constructors
     pub segs: Vec<Segment<F>>,
-    // TODO: support open paths too. Maybe reserve SegIdx(0)? Or SegIdx(usize::MAX)?
     pub contour_prev: Vec<Option<SegIdx>>,
     pub contour_next: Vec<Option<SegIdx>>,
+    /// For each segment, stores true if the sweep-line order (small y to big y)
+    /// is the same as the orientation in its original contour.
     pub orientation: Vec<bool>,
 }
 
@@ -115,6 +116,10 @@ impl<F: Float> Segments<F> {
         } else {
             &self.get(idx).start
         }
+    }
+
+    pub fn positively_oriented(&self, idx: SegIdx) -> bool {
+        self.orientation[idx.0]
     }
 
     pub fn add_points<P: Into<Point<F>>>(&mut self, ps: impl IntoIterator<Item = P>, closed: bool) {

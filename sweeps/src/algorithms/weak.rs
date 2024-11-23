@@ -28,9 +28,14 @@ use crate::{
 pub struct WeakSweepLine<F: Float> {
     pub y: F,
     pub segs: Vec<SegIdx>,
-    // The set of segments that changed their relative orders
-    // since the last sweep line.
-    pub segs_that_changed_order: HashSet<SegIdx>,
+    // For the sparse realization, this is the collection of segments that
+    // we know need to be given explicit positions in the current sweep line.
+    //
+    // These include:
+    // - any segments that changed order with any other segments
+    // - any segments that entered or exited
+    // - any segments that are between the endpoints of contour-adjacent segments.
+    pub segs_needing_positions: HashSet<SegIdx>,
 }
 
 impl<F: Float> WeakSweepLine<F> {
@@ -38,7 +43,7 @@ impl<F: Float> WeakSweepLine<F> {
         Self {
             y,
             segs: Vec::new(),
-            segs_that_changed_order: HashSet::new(),
+            segs_needing_positions: HashSet::new(),
         }
     }
 }
@@ -187,7 +192,9 @@ impl<F: Float> State<F> {
                 let new_seg = self.segments.get(seg_idx);
                 let pos = self.line.insertion_idx(&self.segments, new_seg, &self.eps);
                 self.insert(pos, seg_idx);
-                self.line.segs_that_changed_order.insert(seg_idx);
+                self.line.segs_needing_positions.insert(seg_idx);
+                self.line
+                    .mark_contour_neighbor(seg_idx, true, &self.segments);
             }
             SweepEventKind::Exit(seg_idx) => {
                 let pos = self
@@ -195,14 +202,16 @@ impl<F: Float> State<F> {
                     .position(seg_idx)
                     .expect("exit for a segment we don't have");
                 self.remove(pos);
-                self.line.segs_that_changed_order.insert(seg_idx);
+                self.line.segs_needing_positions.insert(seg_idx);
+                self.line
+                    .mark_contour_neighbor(seg_idx, false, &self.segments);
             }
             SweepEventKind::Intersection { left, right } => {
                 let left_idx = self.line.segs.iter().position(|&x| x == left).unwrap();
                 let right_idx = self.line.segs.iter().position(|&x| x == right).unwrap();
                 if left_idx < right_idx {
                     self.line
-                        .segs_that_changed_order
+                        .segs_needing_positions
                         .extend(&self.line.segs[left_idx..=right_idx]);
                     let left_seg = self.segments.get(left);
                     let eps = &self.eps;
@@ -410,30 +419,53 @@ impl<F: Float> WeakSweepLine<F> {
     ) -> Option<Range<usize>> {
         let idx = self.position(seg)?;
         let mut start_idx = idx;
-        let mut running_min = segments.get(seg).lower_bound(&self.y, eps).lower;
+        let mut seg_min = segments.get(seg).lower_bound(&self.y, eps).lower;
 
         for i in (0..idx).rev() {
             let prev_seg = segments.get(self.segs[i]);
-            if prev_seg.upper_bound(&self.y, eps).upper < running_min {
+            if prev_seg.upper_bound(&self.y, eps).upper < seg_min {
                 break;
             } else {
-                running_min = running_min.min(prev_seg.lower_bound(&self.y, eps).lower);
+                seg_min = prev_seg.lower_bound(&self.y, eps).lower;
                 start_idx = i;
             }
         }
 
         let mut end_idx = idx + 1;
-        let mut running_max = segments.get(seg).upper_bound(&self.y, eps).upper;
+        let mut seg_max = segments.get(seg).upper_bound(&self.y, eps).upper;
         for i in (idx + 1)..self.segs.len() {
             let next_seg = segments.get(self.segs[i]);
-            if next_seg.lower_bound(&self.y, eps).lower > running_max {
+            if next_seg.lower_bound(&self.y, eps).lower > seg_max {
                 break;
             } else {
-                running_max = running_max.max(next_seg.upper_bound(&self.y, eps).upper);
+                seg_max = next_seg.upper_bound(&self.y, eps).upper;
                 end_idx = i + 1;
             }
         }
         Some(start_idx..end_idx)
+    }
+
+    fn mark_contour_neighbor(&mut self, idx: SegIdx, enter: bool, segments: &Segments<F>) {
+        let nbr = if segments.positively_oriented(idx) == enter {
+            segments.contour_prev[idx.0]
+        } else {
+            segments.contour_next[idx.0]
+        };
+        let Some(nbr) = nbr else {
+            return;
+        };
+
+        let seg_pos = self.position(idx);
+        let nbr_pos = self.position(nbr);
+        let Some((seg_pos, nbr_pos)) = seg_pos.zip(nbr_pos) else {
+            return;
+        };
+
+        self.segs_needing_positions.extend(
+            self.segs[seg_pos.min(nbr_pos)..=seg_pos.max(nbr_pos)]
+                .iter()
+                .copied(),
+        );
     }
 
     /// Return all the segments in this sweep-line, along with a valid x position.
@@ -518,7 +550,7 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLine<F>>
     let mut ret = Vec::new();
 
     while let Some(y) = state.events.next_y().cloned() {
-        state.line.segs_that_changed_order.clear();
+        state.line.segs_needing_positions.clear();
         // Loop over all the events at the current y.
         while Some(&y) == state.events.next_y() {
             state.step();
@@ -598,7 +630,7 @@ impl<F: Float> Horizontals<F> {
                 if segments.get(*idx).lower_bound(&weak.y, eps).lower > h_seg.end.y {
                     break;
                 }
-                weak.segs_that_changed_order.insert(*idx);
+                weak.segs_needing_positions.insert(*idx);
             }
         }
     }
@@ -765,10 +797,8 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
 
     let mut prev = weaks[0].clone();
     for line in &mut weaks[1..] {
-        dbg!(&line);
         horizontals.add_reorders(line, segments, eps);
-        let segs: Vec<_> = line.segs_that_changed_order.iter().cloned().collect();
-        dbg!(&segs);
+        let segs: Vec<_> = line.segs_needing_positions.iter().cloned().collect();
         let mut processed_segs = HashSet::new();
 
         let mut entries = HashMap::new();
@@ -848,17 +878,18 @@ mod tests {
     fn mk_segs(xs: &[(f64, f64)]) -> Segments<NotNan<f64>> {
         let y0: NotNan<f64> = 0.0.try_into().unwrap();
         let y1: NotNan<f64> = 1.0.try_into().unwrap();
-        let segs: Vec<_> = xs
-            .iter()
-            .map(|&(x0, x1)| Segment {
-                start: Point::new(x0.try_into().unwrap(), y0),
-                end: Point::new(x1.try_into().unwrap(), y1),
-            })
-            .collect();
-        Segments {
-            segs,
-            ..Segments::default()
+        let mut segs = Segments::default();
+
+        for &(x0, x1) in xs {
+            segs.add_points(
+                [
+                    Point::new(x0.try_into().unwrap(), y0),
+                    Point::new(x1.try_into().unwrap(), y1),
+                ],
+                false,
+            );
         }
+        segs
     }
 
     #[test]
@@ -871,7 +902,7 @@ mod tests {
             let line = WeakSweepLine {
                 y,
                 segs: (0..xs.len()).map(SegIdx).collect(),
-                segs_that_changed_order: HashSet::new(),
+                segs_needing_positions: HashSet::new(),
             };
 
             line.find_invalid_order(&segs, &eps)
@@ -928,7 +959,7 @@ mod tests {
             let line = WeakSweepLine {
                 y,
                 segs: (0..xs.len()).map(SegIdx).collect(),
-                segs_that_changed_order: HashSet::new(),
+                segs_needing_positions: HashSet::new(),
             };
             line.insertion_idx(&segs, &new, &eps)
         }
@@ -1029,12 +1060,6 @@ mod tests {
         Point::new(F::from_f32(x), F::from_f32(y))
     }
 
-    fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
-        xs.windows(2)
-            .map(|pair| (&pair[0], &pair[1]))
-            .chain(xs.last().zip(xs.first()))
-    }
-
     fn run_perturbation<P: FloatPerturbation>(ps: Vec<Perturbation<P>>) {
         let base = vec![vec![
             p(0.0, 0.0),
@@ -1049,21 +1074,10 @@ mod tests {
             .iter()
             .map(|p| realize_perturbation(&base, p))
             .collect::<Vec<_>>();
-        let segs = Segments {
-            segs: perturbed_polylines
-                .iter()
-                .flat_map(|poly| {
-                    cyclic_pairs(poly).map(|(p0, p1)| Segment {
-                        start: p0.min(p1).clone(),
-                        end: p0.max(p1).clone(),
-                    })
-                })
-                .collect(),
-            contour_prev: vec![],
-            contour_next: vec![],
-            orientation: vec![],
-        };
-
+        let mut segs = Segments::default();
+        for poly in perturbed_polylines {
+            segs.add_points(poly, true);
+        }
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
