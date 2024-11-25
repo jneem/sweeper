@@ -150,6 +150,8 @@ impl<F: Float> Segments<F> {
             self.orientation.pop();
             self.contour_prev.pop();
             self.contour_next.pop();
+            self.contour_prev[old_len] = None;
+            *self.contour_next.last_mut().unwrap() = None;
         }
     }
 
