@@ -859,21 +859,6 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
     ret
 }
 
-/// A sweep line position gets associated each time that a segment appears in
-/// a sweep line event.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum SweepLinePosition {
-    /// Out of all the events associated to this segment in this sweep line,
-    /// this one is the first in the segment's orientation.
-    First,
-    Mid,
-    /// Out of all the events associated to this segment in this sweep line,
-    /// this one is the last in the segment's orientation.
-    Last,
-    // TODO: should we have an `Only` variant for segments that only hit
-    // the sweep line once? Currently we use `First` or `Last` for this case.
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OutputEventKind<F: Float> {
     Enter(F),
@@ -883,20 +868,23 @@ pub enum OutputEventKind<F: Float> {
     // - part of a real horizontal segment
     // - a horizontal part of a segment that continues through this sweep line
     // - a horizontal bit introduced to join two adjacent parts of the contour.
-    Horizontal(F, F),
+    // The bool is true if the order of this segment agrees with the sweep-order
+    // (not the oriented order!) of the segment it's a part of.
+    Horizontal(F, F, bool),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputEvent<F: Float> {
-    seg: SegIdx,
-    y: F,
-    x: OutputEventKind<F>,
+    pub seg: SegIdx,
+    pub y: F,
+    pub x: OutputEventKind<F>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HSeg<F: Float> {
     end: F,
     enter_first: bool,
+    contour_connector: bool,
     seg: SegIdx,
 }
 
@@ -940,6 +928,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                     x: OutputEventKind::Horizontal(
                         last_x.clone().unwrap(),
                         h.end.clone().min(x.clone()),
+                        h.enter_first,
                     ),
                 });
             }
@@ -954,11 +943,13 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                     } else {
                         OutputEventKind::Enter(event_x)
                     };
-                    callback(OutputEvent {
-                        seg: h.seg,
-                        y: line.y.clone(),
-                        x: kind,
-                    });
+                    if h.end < x || !h.contour_connector {
+                        callback(OutputEvent {
+                            seg: h.seg,
+                            y: line.y.clone(),
+                            x: kind,
+                        });
+                    }
                     active_horizontals.pop_first();
                 } else {
                     break;
@@ -971,7 +962,14 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                     let kind = match (s.start.y < line.y, line.y < s.end.y) {
                         (true, false) => OutputEventKind::Enter(x.clone()),
                         (false, true) => OutputEventKind::Exit(x.clone()),
-                        (false, false) | (true, true) => unreachable!(),
+                        (true, true) => {
+                            // We'd like this to be unreachable, but it actually gets reached. I think
+                            // it's because of influence_range not always lining up between the previous
+                            // line and the new one.
+                            OutputEventKind::PassThrough(x.clone())
+                        }
+
+                        (false, false) => unreachable!(),
                     };
 
                     callback(OutputEvent {
@@ -988,6 +986,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                                 end: next_nbr_start.clone(),
                                 enter_first: true,
                                 seg: seg.idx,
+                                contour_connector: true,
                             });
                         }
                     }
@@ -1000,6 +999,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                                 end: prev_nbr_start.clone(),
                                 enter_first: false,
                                 seg: seg.idx,
+                                contour_connector: true,
                             });
                         }
                     }
@@ -1011,6 +1011,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                                 end: seg.x.larger_x().clone(),
                                 seg: seg.idx,
                                 enter_first: true,
+                                contour_connector: false,
                             });
                             OutputEventKind::Enter(enter_x.clone())
                         }
@@ -1019,6 +1020,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                                 end: seg.x.larger_x().clone(),
                                 seg: seg.idx,
                                 enter_first: false,
+                                contour_connector: false,
                             });
                             OutputEventKind::Exit(exit_x.clone())
                         }
