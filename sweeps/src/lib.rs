@@ -3,6 +3,7 @@
 pub mod algorithms;
 pub mod geom;
 pub mod num;
+mod subrange;
 pub mod sweep;
 
 #[cfg(test)]

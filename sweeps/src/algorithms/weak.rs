@@ -40,6 +40,13 @@ pub struct WeakSweepLine<F: Float> {
     // included with the usual `segs` because it's easier (and probably faster)
     // to give them special treatment.
     pub horizontals: Vec<SegIdx>,
+    // Segments marked as having exited the sweep-line. We don't remove them
+    // immediately because that shifts indices around and makes it harder to
+    // compare old vs. new sweep-lines. Instead, we remember that we're supposed
+    // to remove them and then actually remove them when we advance `y`.
+    //
+    // This could potentially be part of the `segs` list instead of as a separate
+    // map.
     pub exits: HashSet<SegIdx>,
     pub entrances: HashSet<SegIdx>,
 }
@@ -808,7 +815,7 @@ pub fn weaks_to_sweeps_dense<F: Float>(
 }
 
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
-/// of actual sweep lines, while trying not to add in two many subdivisions.
+/// of actual sweep lines, while trying not to add in too many subdivisions.
 pub fn weaks_to_sweeps_sparse<F: Float>(
     weaks: &[(WeakSweepLine<F>, WeakSweepLine<F>)],
     segments: &Segments<F>,
@@ -941,7 +948,6 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
     let sweeps = weaks_to_sweeps_sparse(weaks, segments, eps);
 
     for line in sweeps {
-        // TODO: We only need heap operations; maybe that's more efficient than a BTreeSet?
         let mut active_horizontals: BTreeSet<HSeg<F>> = BTreeSet::new();
         let positions: HashMap<SegIdx, usize> = line
             .segs
