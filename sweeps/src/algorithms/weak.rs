@@ -76,6 +76,32 @@ impl<F: Float> EventQueue<F> {
     pub fn next_y(&self) -> Option<&F> {
         self.inner.peek().map(|Reverse(ev)| &ev.y)
     }
+
+    fn next_kind(&self) -> Option<&SweepEventKind> {
+        self.inner.peek().map(|Reverse(ev)| &ev.kind)
+    }
+
+    pub fn next_is_stage_1(&self, y: &F) -> bool {
+        self.next_y() == Some(y)
+            && self.next_kind().map_or(false, |kind| match kind {
+                SweepEventKind::Enter(_) | SweepEventKind::Horizontal(_) => true,
+                SweepEventKind::Intersection { .. } | SweepEventKind::Exit(_) => false,
+            })
+    }
+
+    pub fn next_is_stage_2(&self, y: &F) -> bool {
+        self.next_y() == Some(y)
+            && self.next_kind().map_or(false, |kind| match kind {
+                SweepEventKind::Enter(_)
+                | SweepEventKind::Horizontal(_)
+                | SweepEventKind::Exit(_) => false,
+                SweepEventKind::Intersection { .. } => true,
+            })
+    }
+
+    pub fn next_is_at(&self, y: &F) -> bool {
+        self.next_y() == Some(y)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -573,9 +599,19 @@ impl<F: Float> WeakSweepLine<F> {
     }
 }
 
+pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLine<F>> {
+    sweep_pairs(segments, eps)
+        .into_iter()
+        .map(|(_, x)| x)
+        .collect()
+}
+
 /// Runs a sweep over all the segments, returning a sweep line at every `y` where
 /// there was an event.
-pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLine<F>> {
+pub fn sweep_pairs<F: Float>(
+    segments: &Segments<F>,
+    eps: &F,
+) -> Vec<(WeakSweepLine<F>, WeakSweepLine<F>)> {
     let events = EventQueue {
         inner: segments
             .indices()
@@ -608,14 +644,26 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLine<F>>
 
     while let Some(y) = state.events.next_y().cloned() {
         state.line.advance(y.clone());
-        // Loop over all the events at the current y.
-        while Some(&y) == state.events.next_y() {
+        // Process all the enter events at this y.
+        while state.events.next_is_stage_1(&y) {
+            state.step();
+            state.check_invariants();
+        }
+        let old_line = state.line.clone();
+
+        // Process all the reorderings
+        while state.events.next_is_stage_2(&y) {
             state.step();
             state.check_invariants();
         }
         state.line.add_horizontal_reorders(segments, eps);
+        ret.push((old_line, state.line.clone()));
 
-        ret.push(state.line.clone());
+        // Process all the exit events at this y.
+        while state.events.next_is_at(&y) {
+            state.step();
+            state.check_invariants();
+        }
     }
 
     ret
@@ -642,14 +690,15 @@ impl<F: Float> SweepLine<F> {
 /// of actual sweep lines, in the naivest possibly way: subdividing every
 /// segment at every sweep line.
 pub fn weaks_to_sweeps_dense<F: Float>(
-    weaks: &[WeakSweepLine<F>],
+    weaks: &[(WeakSweepLine<F>, WeakSweepLine<F>)],
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
     // The first sweep-line just has a single entry for everything
     let mut first_line = SweepLine {
-        y: weaks[0].y.clone(),
+        y: weaks[0].1.y.clone(),
         segs: weaks[0]
+            .1
             .ordered_xs(segments, eps)
             .map(|(idx, x)| SweepLineEntry {
                 idx,
@@ -658,13 +707,11 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             .collect(),
     };
 
-    first_line.add_horizontals(&weaks[0].horizontals, segments);
+    first_line.add_horizontals(&weaks[0].1.horizontals, segments);
 
     let mut ret = vec![first_line];
 
-    let mut prev = weaks[0].clone();
-    for line in &weaks[1..] {
-        prev.y = line.y.clone();
+    for (prev, line) in &weaks[1..] {
         // TODO: should be able to build things up in order by iterating over
         // both `prev` and `line` in one pass. But it isn't quite trivial
         // because we need to keep track of segments that were in one but
@@ -694,14 +741,12 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             .collect();
 
         let mut sweep_line = SweepLine {
-            y: prev.y,
+            y: line.y.clone(),
             segs: entries,
         };
         sweep_line.add_horizontals(&line.horizontals, segments);
         sweep_line.segs.sort();
         ret.push(sweep_line);
-
-        prev = line.clone();
     }
 
     ret
@@ -1151,7 +1196,7 @@ mod tests {
 
         let mut segs1 = segs.clone();
         segs1.add_points(h(-5.0), false);
-        let lines = sweep(&segs1, &eps);
+        let lines = sweep_pairs(&segs1, &eps);
         let lines = &weaks_to_sweeps_dense(&lines, &segs1, &eps);
         // TODO: maybe snapshot tests?
         dbg!(&lines);
@@ -1159,7 +1204,7 @@ mod tests {
 
         let mut segs2 = segs.clone();
         segs2.add_points(h(0.75), false);
-        let lines = sweep(&segs2, &eps);
+        let lines = sweep_pairs(&segs2, &eps);
         let lines = &weaks_to_sweeps_dense(&lines, &segs2, &eps);
         // TODO: maybe snapshot tests?
         dbg!(&lines);
@@ -1168,7 +1213,7 @@ mod tests {
         let mut segs3 = segs.clone();
         segs3.add_points(h(1.0), false);
         segs3.add_points(h(2.0), false);
-        let lines = sweep(&segs3, &eps);
+        let lines = sweep_pairs(&segs3, &eps);
         let lines = &weaks_to_sweeps_dense(&lines, &segs3, &eps);
         // TODO: maybe snapshot tests?
         dbg!(&lines);
@@ -1198,7 +1243,7 @@ mod tests {
             segs.add_points(poly, true);
         }
         let eps = P::Float::from_f32(0.1);
-        let weaks = sweep(&segs, &eps);
+        let weaks = sweep_pairs(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
     }
 
