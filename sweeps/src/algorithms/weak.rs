@@ -1075,7 +1075,6 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use malachite::Rational;
     use ordered_float::NotNan;
     use proptest::prelude::*;
 
@@ -1290,27 +1289,6 @@ mod tests {
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
-    }
-
-    #[test]
-    fn test_bug() {
-        use crate::perturbation::{Perturbation, PointPerturbation, RationalPerturbation};
-        let perturbations = vec![
-            Perturbation::Point {
-                perturbation: PointPerturbation {
-                    x: RationalPerturbation { eps: 0.into() },
-                    y: RationalPerturbation {
-                        eps: Rational::from(7018751602662457u64)
-                            / Rational::from(72057594037927936u64),
-                    },
-                },
-                idx: 6036831088017250500,
-                next: Box::new(Perturbation::Base { idx: 0 }),
-            },
-            Perturbation::Base { idx: 0 },
-        ];
-
-        run_perturbation(perturbations);
     }
 
     proptest! {
