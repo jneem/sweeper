@@ -662,6 +662,67 @@ impl<F: Float> WeakSweepLine<F> {
     }
 }
 
+pub struct WeakSweepLinePair<F: Float> {
+    // TODO: there's redundant state in here. Could refactor some bits out of WeakSweepLine
+    pub old_line: WeakSweepLine<F>,
+    pub new_line: WeakSweepLine<F>,
+}
+
+impl<F: Float> WeakSweepLinePair<F> {
+    /// We've marked various segments that need to be given an explicit
+    /// horizontal position in the new sweep line, but in order to do that we
+    /// may need to consider the positions of other nearby segments. In this
+    /// method we explore nearby segments, turning our list of segments needing
+    /// positions into a disjoint list of intervals needing positions.
+    pub fn changed_intervals(&self, segments: &Segments<F>, eps: &F) -> Vec<(usize, usize)> {
+        let mut changed: BTreeSet<_> = self
+            .new_line
+            .segs_needing_positions
+            .iter()
+            .cloned()
+            .collect();
+        let mut ret = Vec::new();
+        let y = &self.new_line.y;
+
+        // Copy-pasted from `influence_range`
+        while let Some(seg_idx) = changed.pop_first() {
+            // unwrap: segs_needing_positions should all be in the line.
+            let idx = self.new_line.position(seg_idx).unwrap();
+            let mut start_idx = idx;
+            let mut seg_min = segments.get(seg_idx).lower_bound(y, eps).lower;
+
+            for i in (0..idx).rev() {
+                let prev_seg_idx = self.new_line.segs[i];
+                let prev_seg = segments.get(prev_seg_idx);
+                if prev_seg.upper_bound(y, eps).upper < seg_min {
+                    break;
+                } else {
+                    seg_min = prev_seg.lower_bound(y, eps).lower;
+                    changed.remove(&prev_seg_idx);
+                    start_idx = i;
+                }
+            }
+
+            let mut end_idx = idx + 1;
+            let mut seg_max = segments.get(seg_idx).upper_bound(y, eps).upper;
+            for i in (idx + 1)..self.new_line.segs.len() {
+                let next_seg_idx = self.new_line.segs[i];
+                let next_seg = segments.get(next_seg_idx);
+                if next_seg.lower_bound(y, eps).lower > seg_max {
+                    break;
+                } else {
+                    seg_max = next_seg.upper_bound(y, eps).upper;
+                    changed.remove(&next_seg_idx);
+                    end_idx = i + 1;
+                }
+            }
+            ret.push((start_idx, end_idx))
+        }
+        ret.sort();
+        ret
+    }
+}
+
 /// Runs a sweep over all the segments, returning a sweep line at every `y` where
 /// there was an event.
 pub fn sweep<F: Float>(
