@@ -122,9 +122,6 @@ impl<F: Float> State<F> {
                 .position(seg_idx)
                 .expect("exit for a segment we don't have");
             self.remove(pos);
-            self.line.segs_needing_positions.insert(seg_idx);
-            self.line
-                .mark_contour_neighbor(seg_idx, false, &self.segments);
         }
     }
 
@@ -146,6 +143,9 @@ impl<F: Float> State<F> {
         let mut height_bound = seg.end.y.clone();
 
         for j in (start_idx + 1)..self.line.segs.len() {
+            if self.line.exits.contains(&self.line.segs[j]) {
+                continue;
+            }
             let other = self.segments.get(self.line.segs[j]);
             height_bound = height_bound.min(other.end.y.clone());
             // In the write-up, we check whether `seg` crosses the upper bound
@@ -166,7 +166,7 @@ impl<F: Float> State<F> {
                     self.events.push(SweepEvent::intersection(
                         self.line.segs[start_idx],
                         self.line.segs[j],
-                        int_y.clone(),
+                        int_y.clone().max(self.line.y.clone()),
                     ));
                     height_bound = int_y;
                 }
@@ -191,6 +191,9 @@ impl<F: Float> State<F> {
         let mut height_bound = seg.end.y.clone();
 
         for j in (0..start_idx).rev() {
+            if self.line.exits.contains(&self.line.segs[j]) {
+                continue;
+            }
             let other = self.segments.get(self.line.segs[j]);
             height_bound = height_bound.min(other.end.y.clone());
             let crosses = seg.end_offset(other) >= self.eps.clone() / F::from_f32(2.0);
@@ -209,7 +212,7 @@ impl<F: Float> State<F> {
                     self.events.push(SweepEvent::intersection(
                         self.line.segs[j],
                         self.line.segs[start_idx],
-                        int_y.clone(),
+                        int_y.clone().max(self.line.y.clone()),
                     ));
                     height_bound = int_y;
                 }
@@ -229,6 +232,9 @@ impl<F: Float> State<F> {
 
     fn remove(&mut self, pos: usize) {
         self.line.segs.remove(pos);
+    }
+
+    fn scan_for_removal(&mut self, pos: usize) {
         if pos > 0 {
             self.intersection_scan_right(pos - 1);
             self.intersection_scan_left(pos - 1);
@@ -258,6 +264,14 @@ impl<F: Float> State<F> {
                 self.line.entrances.insert(seg_idx);
             }
             SweepEventKind::Exit(seg_idx) => {
+                let pos = self
+                    .line
+                    .position(seg_idx)
+                    .expect("exit for a segment we don't have");
+                self.scan_for_removal(pos);
+                self.line.segs_needing_positions.insert(seg_idx);
+                self.line
+                    .mark_contour_neighbor(seg_idx, false, &self.segments);
                 self.line.exits.insert(seg_idx);
             }
             SweepEventKind::Intersection { left, right } => {
@@ -286,6 +300,7 @@ impl<F: Float> State<F> {
                     // Remove them in reverse to make indexing easier.
                     for &(j, _) in to_move.iter().rev() {
                         self.remove(j);
+                        self.scan_for_removal(j);
                     }
 
                     // We want to insert them at what was previously `right_idx + 1`, but the
@@ -308,13 +323,37 @@ impl<F: Float> State<F> {
     }
 
     pub fn check_invariants(&self) {
+        for ev in &self.events.inner {
+            assert!(
+                ev.0.y >= self.line.y,
+                "at y={:?}, event {:?} occurred in the past",
+                &self.line.y,
+                &ev
+            );
+        }
+
+        for &seg_idx in &self.line.segs {
+            let seg = self.segments.get(seg_idx);
+            assert!(
+                (&seg.start.y..=&seg.end.y).contains(&&self.line.y),
+                "segment {seg:?} out of range at y={:?}",
+                self.line.y
+            );
+        }
+
         assert!(self
             .line
             .find_invalid_order(&self.segments, &self.eps)
             .is_none());
 
         for i in 0..self.line.segs.len() {
+            if self.line.exits.contains(&self.line.segs[i]) {
+                continue;
+            }
             for j in (i + 1)..self.line.segs.len() {
+                if self.line.exits.contains(&self.line.segs[j]) {
+                    continue;
+                }
                 let segi = self.segments.get(self.line.segs[i]).to_exact();
                 let segj = self.segments.get(self.line.segs[j]).to_exact();
 
@@ -672,18 +711,17 @@ pub fn sweep<F: Float>(
         // Process all the exit events at this y.
         while state.events.next_is_at(&y) {
             state.step();
-            // This is a bit yucky, but we don't check the invariants after
-            // processing exit events, because the intersection checking is
-            // deferred until we advance the line.
+            state.check_invariants();
         }
         state
             .line
             .segs_needing_positions
             .extend(state.line.exits.iter().copied());
         ret.push((old_line, state.line.clone()));
+        state.process_exits();
     }
 
-    dbg!(ret)
+    ret
 }
 
 impl<F: Float> SweepLine<F> {
@@ -1037,6 +1075,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use malachite::Rational;
     use ordered_float::NotNan;
     use proptest::prelude::*;
 
@@ -1251,6 +1290,27 @@ mod tests {
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
+    }
+
+    #[test]
+    fn test_bug() {
+        use crate::perturbation::{Perturbation, PointPerturbation, RationalPerturbation};
+        let perturbations = vec![
+            Perturbation::Point {
+                perturbation: PointPerturbation {
+                    x: RationalPerturbation { eps: 0.into() },
+                    y: RationalPerturbation {
+                        eps: Rational::from(7018751602662457u64)
+                            / Rational::from(72057594037927936u64),
+                    },
+                },
+                idx: 6036831088017250500,
+                next: Box::new(Perturbation::Base { idx: 0 }),
+            },
+            Perturbation::Base { idx: 0 },
+        ];
+
+        run_perturbation(perturbations);
     }
 
     proptest! {

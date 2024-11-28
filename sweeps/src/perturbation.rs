@@ -23,7 +23,7 @@ pub enum F32Perturbation {
 #[derive(Clone, Debug)]
 pub struct RationalPerturbation {
     /// Perturb by an additive amount.
-    eps: Rational,
+    pub eps: Rational,
 }
 
 // The Debug bound is because some of the proptest strategy builders want it. Having it here is

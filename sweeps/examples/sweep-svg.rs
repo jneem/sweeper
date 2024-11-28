@@ -92,7 +92,7 @@ pub fn main() -> anyhow::Result<()> {
     let segments = svg_to_segments(&tree);
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
-    let weak_lines = sweeps::algorithms::weak::sweep_pairs(&segments, &eps);
+    let weak_lines = sweeps::algorithms::weak::sweep(&segments, &eps);
     let sweep_lines = if args.dense {
         sweeps::algorithms::weak::weaks_to_sweeps_dense(&weak_lines, &segments, &eps)
     } else {
