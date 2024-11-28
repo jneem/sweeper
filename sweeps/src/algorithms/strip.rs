@@ -110,6 +110,7 @@ impl<F: Float> PreStrip<F> {
                     }
                 }
                 crate::sweep::SweepEventKind::Intersection { .. } => {}
+                crate::sweep::SweepEventKind::Horizontal(_) => {}
             }
         }
 

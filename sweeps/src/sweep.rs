@@ -165,6 +165,7 @@ impl<F: Float> Segments<F> {
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub enum SweepEventKind {
     Enter(SegIdx),
+    Horizontal(SegIdx),
     Intersection { left: SegIdx, right: SegIdx },
     Exit(SegIdx),
 }
@@ -180,6 +181,9 @@ impl std::fmt::Debug for SweepEventKind {
             }
             SweepEventKind::Exit(seg) => {
                 write!(f, "exit({seg:?})")
+            }
+            SweepEventKind::Horizontal(seg) => {
+                write!(f, "horizontal({seg:?})")
             }
         }
     }
