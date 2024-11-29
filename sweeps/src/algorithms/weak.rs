@@ -16,6 +16,8 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+use malachite::Rational;
+
 use crate::{
     geom::Segment,
     num::{Bounds, Float},
@@ -264,6 +266,10 @@ impl<F: Float> State<F> {
                 self.line.entrances.insert(seg_idx);
             }
             SweepEventKind::Exit(seg_idx) => {
+                // It's important that this goes before `scan_for_removal`, so that
+                // the scan doesn't get confused by the segment that should be marked
+                // for exit.
+                self.line.exits.insert(seg_idx);
                 let pos = self
                     .line
                     .position(seg_idx)
@@ -271,7 +277,6 @@ impl<F: Float> State<F> {
                 self.scan_for_removal(pos);
                 self.line.segs_needing_positions.insert(seg_idx);
                 self.line.mark_endpoint(seg_idx, pos, false, &self.segments);
-                self.line.exits.insert(seg_idx);
             }
             SweepEventKind::Intersection { left, right } => {
                 let left_idx = self.line.segs.iter().position(|&x| x == left).unwrap();
@@ -352,6 +357,7 @@ impl<F: Float> State<F> {
             .find_invalid_order(&self.segments, &self.eps)
             .is_none());
 
+        let eps = self.eps.to_exact();
         for i in 0..self.line.segs.len() {
             if self.line.exits.contains(&self.line.segs[i]) {
                 continue;
@@ -363,7 +369,7 @@ impl<F: Float> State<F> {
                 let segi = self.segments.get(self.line.segs[i]).to_exact();
                 let segj = self.segments.get(self.line.segs[j]).to_exact();
 
-                if let Some(y_int) = segi.exact_intersection_y(&segj) {
+                if let Some(y_int) = segi.exact_eps_crossing(&segj, &eps) {
                     if y_int >= self.line.y.to_exact() {
                         // Find an event between i and j.
                         let is_between = |idx: SegIdx| -> bool {
@@ -371,17 +377,50 @@ impl<F: Float> State<F> {
                                 .position(idx)
                                 .map_or(false, |pos| i <= pos && pos <= j)
                         };
-                        let has_witness = self.events.inner.iter().any(|ev| match &ev.0.kind {
-                            SweepEventKind::Enter(_) | SweepEventKind::Horizontal(_) => false,
-                            SweepEventKind::Intersection { left, right } => {
-                                is_between(*left) && is_between(*right)
-                            }
-                            SweepEventKind::Exit(seg_idx) => is_between(*seg_idx),
+                        let has_witness = self.events.inner.iter().any(|ev| {
+                            let is_between = match &ev.0.kind {
+                                SweepEventKind::Enter(_) | SweepEventKind::Horizontal(_) => false,
+                                SweepEventKind::Intersection { left, right } => {
+                                    is_between(*left) && is_between(*right)
+                                }
+                                SweepEventKind::Exit(seg_idx) => is_between(*seg_idx),
+                            };
+                            let before_y = ev.0.y.to_exact() <= y_int;
+                            is_between && before_y
                         });
-                        assert!(has_witness);
+                        assert!(
+                            has_witness,
+                            "segments {:?} and {:?} cross at {:?}, but there is no witness",
+                            self.line.segs[i], self.line.segs[j], y_int
+                        );
                     }
                 }
             }
+        }
+    }
+}
+
+impl Segment<Rational> {
+    // The moment our lower bound crosses to the right of `other`'s upper bound.
+    // (Actually, it could give too large a value right now, because it doesn't take the
+    // "chamfers" into account.)
+    pub fn exact_eps_crossing(&self, other: &Self, eps: &Rational) -> Option<Rational> {
+        let y0 = self.start.y.clone().max(other.start.y.clone());
+        let y1 = self.end.y.clone().min(other.end.y.clone());
+        let scaled_eps = self.scaled_eps(eps);
+
+        assert!(y1 >= y0);
+
+        let dx0 = other.at_y(&y0) - self.at_y(&y0) + scaled_eps.clone() * Rational::from(2);
+        let dx1 = other.at_y(&y1) - self.at_y(&y1) + scaled_eps * Rational::from(2);
+        if dx0 == dx1 {
+            // They're parallel.
+            (dx0 == 0).then_some(y0)
+        } else if dx1 < 0 {
+            let t = &dx0 / (&dx0 - dx1);
+            (0..=1).contains(&t).then(|| &y0 + t * (y1 - &y0))
+        } else {
+            None
         }
     }
 }
@@ -634,6 +673,7 @@ impl<F: Float> WeakSweepLine<F> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct WeakSweepLinePair<F: Float> {
     // TODO: there's redundant state in here. Could refactor some bits out of WeakSweepLine
     pub old_line: WeakSweepLine<F>,
@@ -700,7 +740,7 @@ impl<F: Float> WeakSweepLinePair<F> {
     }
 
     // idea: rather than connecting segments to their contour neighbors directly, connect
-    // the positioned endpoint to the actual endpoint.
+    // the positioned endpoint to the actual endpoint. TODO: write this more clearly
     fn position_range(
         &self,
         range: (usize, usize),
@@ -715,7 +755,59 @@ impl<F: Float> WeakSweepLinePair<F> {
             .new_line
             .ordered_partial_xs(range.0..range.1, segments, eps);
 
-        todo!()
+        // The two positioning arrays should have the same segments, but possibly in a different
+        // order. Group them by segment id.
+        let mut seg_positions: HashMap<SegIdx, (F, Option<F>)> = HashMap::new();
+        for (idx, x) in old_xs {
+            seg_positions.insert(idx, (x, None));
+        }
+        for (idx, x) in new_xs {
+            seg_positions
+                .get_mut(&idx)
+                .expect("the two ranges should have the same segments")
+                .1 = Some(x);
+        }
+
+        let mut positions: Vec<Position<F>> = Vec::new();
+        for (idx, (x0, x1)) in seg_positions {
+            let Some(x1) = x1 else {
+                panic!("the two ranges should have the same segments");
+            };
+
+            let entrance = self.new_line.entrances.contains(&idx);
+            let exit = self.new_line.exits.contains(&idx);
+            let seg = segments.get(idx);
+            let kind = match (entrance, exit) {
+                (true, true) => {
+                    // A horizontal segment. We can ignore the inferred position, and
+                    // go with the original bounds.
+                    debug_assert!(seg.is_horizontal());
+                    PositionKind::from_points(seg.start.x.clone(), seg.end.x.clone())
+                }
+                (true, false) => {
+                    // The segment enters at this sweep-line. The actual entrance position
+                    // will be the segment's true start position, and then we will move
+                    // to the adjusted position before leaving this sweep-line.
+                    PositionKind::from_points(seg.start.x.clone(), x1)
+                }
+                (false, true) => {
+                    // The segment terminates at this sweep-line. The actual final position
+                    // will be the segment's true end position, but the segment will enter
+                    // the sweep-line at the adjusted position.
+                    PositionKind::from_points(x0, seg.end.x.clone())
+                }
+                (false, false) => PositionKind::from_points(x0, x1),
+            };
+
+            positions.push(Position { kind, seg_idx: idx });
+        }
+        positions.sort();
+
+        PositionIter {
+            positions: positions.into_iter(),
+            last_x: None,
+            active_horizontals: BTreeSet::new(),
+        }
     }
 }
 
@@ -742,10 +834,7 @@ fn merge_adjacent(intervals: impl IntoIterator<Item = (usize, usize)>) -> Vec<(u
 
 /// Runs a sweep over all the segments, returning a sweep line at every `y` where
 /// there was an event.
-pub fn sweep<F: Float>(
-    segments: &Segments<F>,
-    eps: &F,
-) -> Vec<(WeakSweepLine<F>, WeakSweepLine<F>)> {
+pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair<F>> {
     let events = EventQueue {
         inner: segments
             .indices()
@@ -801,43 +890,30 @@ pub fn sweep<F: Float>(
             .line
             .segs_needing_positions
             .extend(state.line.exits.iter().copied());
-        ret.push((old_line, state.line.clone()));
+        ret.push(WeakSweepLinePair {
+            old_line,
+            new_line: state.line.clone(),
+        });
         state.process_exits();
+        state.check_invariants();
     }
 
     ret
-}
-
-impl<F: Float> SweepLine<F> {
-    /// Adds to this sweep-line all horizontal segments that belong in it.
-    fn add_horizontals(&mut self, horizontals: &[SegIdx], segments: &Segments<F>) {
-        for &idx in horizontals {
-            let seg = segments.get(idx);
-
-            self.segs.push(SweepLineEntry {
-                x: SweepLineSeg::EnterExit(
-                    seg.start.x.clone().min(seg.end.x.clone()),
-                    seg.start.x.clone().max(seg.end.x.clone()),
-                ),
-                idx,
-            });
-        }
-    }
 }
 
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
 /// of actual sweep lines, in the naivest possibly way: subdividing every
 /// segment at every sweep line.
 pub fn weaks_to_sweeps_dense<F: Float>(
-    weaks: &[(WeakSweepLine<F>, WeakSweepLine<F>)],
+    weaks: &[WeakSweepLinePair<F>],
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
     // The first sweep-line just has a single entry for everything
-    let mut first_line = SweepLine {
-        y: weaks[0].1.y.clone(),
+    let first_line = SweepLine {
+        y: weaks[0].new_line.y.clone(),
         segs: weaks[0]
-            .1
+            .new_line
             .ordered_xs(segments, eps)
             .map(|(idx, x)| SweepLineEntry {
                 idx,
@@ -848,17 +924,17 @@ pub fn weaks_to_sweeps_dense<F: Float>(
 
     let mut ret = vec![first_line];
 
-    for (prev, line) in &weaks[1..] {
+    for WeakSweepLinePair { old_line, new_line } in &weaks[1..] {
         // TODO: should be able to build things up in order by iterating over
         // both `prev` and `line` in one pass. But it isn't quite trivial
         // because we need to keep track of segments that were in one but
         // haven't yet been encountered in the other.
-        let mut entries: HashMap<_, _> = prev
+        let mut entries: HashMap<_, _> = old_line
             .ordered_xs(segments, eps)
             .map(|(idx, x)| (idx, SweepLineSeg::Single(x)))
             .collect();
 
-        for (idx, x) in line.ordered_xs(segments, eps) {
+        for (idx, x) in new_line.ordered_xs(segments, eps) {
             match entries.entry(idx) {
                 std::collections::hash_map::Entry::Occupied(mut occ) => {
                     let SweepLineSeg::Single(enter_x) = occ.get().clone() else {
@@ -878,7 +954,7 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             .collect();
 
         let mut sweep_line = SweepLine {
-            y: line.y.clone(),
+            y: new_line.y.clone(),
             segs: entries,
         };
         sweep_line.segs.sort();
@@ -891,15 +967,15 @@ pub fn weaks_to_sweeps_dense<F: Float>(
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
 /// of actual sweep lines, while trying not to add in too many subdivisions.
 pub fn weaks_to_sweeps_sparse<F: Float>(
-    weaks: &[(WeakSweepLine<F>, WeakSweepLine<F>)],
+    weaks: &[WeakSweepLinePair<F>],
     segments: &Segments<F>,
     eps: &F,
 ) -> Vec<SweepLine<F>> {
     // The first sweep-line just has a single entry for everything
-    let mut first_line = SweepLine {
-        y: weaks[0].1.y.clone(),
+    let first_line = SweepLine {
+        y: weaks[0].new_line.y.clone(),
         segs: weaks[0]
-            .1
+            .new_line
             .ordered_xs(segments, eps)
             .map(|(idx, x)| SweepLineEntry {
                 idx,
@@ -910,8 +986,8 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
 
     let mut ret = vec![first_line];
 
-    for (prev, line) in &weaks[1..] {
-        let segs: Vec<_> = line.segs_needing_positions.iter().cloned().collect();
+    for WeakSweepLinePair { old_line, new_line } in &weaks[1..] {
+        let segs: Vec<_> = new_line.segs_needing_positions.iter().cloned().collect();
         let mut processed_segs = HashSet::new();
 
         let mut entries = HashMap::new();
@@ -919,12 +995,13 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
             if processed_segs.contains(&seg) {
                 continue;
             }
-            if let Some(range) = prev.influence_range(seg, segments, eps) {
+            if let Some(range) = old_line.influence_range(seg, segments, eps) {
                 entries.extend(
-                    prev.ordered_partial_xs(range.clone(), segments, eps)
+                    old_line
+                        .ordered_partial_xs(range.clone(), segments, eps)
                         .map(|(idx, x)| (idx, SweepLineSeg::Single(x))),
                 );
-                processed_segs.extend(prev.segs[range].iter().cloned());
+                processed_segs.extend(old_line.segs[range].iter().cloned());
             }
         }
 
@@ -934,16 +1011,16 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
                 continue;
             }
 
-            let Some(range) = line.influence_range(seg, segments, eps) else {
+            let Some(range) = new_line.influence_range(seg, segments, eps) else {
                 continue;
             };
-            for (idx, x) in line.ordered_partial_xs(range.clone(), segments, eps) {
+            for (idx, x) in new_line.ordered_partial_xs(range.clone(), segments, eps) {
                 match entries.entry(idx) {
                     std::collections::hash_map::Entry::Occupied(mut occ) => {
                         let SweepLineSeg::Single(enter_x) = occ.get().clone() else {
                             unreachable!()
                         };
-                        if !line.exits.contains(&idx) && !line.entrances.contains(&idx) {
+                        if !new_line.exits.contains(&idx) && !new_line.entrances.contains(&idx) {
                             *occ.get_mut() = SweepLineSeg::EnterExit(enter_x, x);
                         }
                     }
@@ -952,7 +1029,7 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
                     }
                 }
             }
-            processed_segs.extend(line.segs[range].iter().cloned());
+            processed_segs.extend(new_line.segs[range].iter().cloned());
         }
 
         let entries: Vec<_> = entries
@@ -961,7 +1038,7 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
             .collect();
 
         let mut sweep_line = SweepLine {
-            y: line.y.clone(),
+            y: new_line.y.clone(),
             segs: entries,
         };
         sweep_line.segs.sort();
@@ -973,16 +1050,12 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OutputEventKind<F: Float> {
-    Enter(F),
-    Exit(F),
-    PassThrough(F),
+    Point(F),
     // Potentially, we could divide this variant up into:
     // - part of a real horizontal segment
     // - a horizontal part of a segment that continues through this sweep line
     // - a horizontal bit introduced to join two adjacent parts of the contour.
-    // The bool is true if the order of this segment agrees with the sweep-order
-    // (not the oriented order!) of the segment it's a part of.
-    Horizontal(F, F, bool),
+    Horizontal(F, F),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -990,20 +1063,21 @@ pub struct OutputEvent<F: Float> {
     pub seg: SegIdx,
     pub y: F,
     pub x: OutputEventKind<F>,
+    // The bool is true if the order of this segment agrees with the sweep-order
+    // (not the oriented order!) of the segment it's a part of.
+    pub sweep_line_ordered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HSeg<F: Float> {
     end: F,
     enter_first: bool,
-    contour_connector: bool,
     seg: SegIdx,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PositionKind<F: Float> {
-    Enter(F),
-    Exit(F),
+    Point(F),
     // The two points are in sweep-line order. TODO: document more carefully what this means.
     Horizontal(F, F),
 }
@@ -1011,15 +1085,23 @@ enum PositionKind<F: Float> {
 impl<F: Float> PositionKind<F> {
     pub fn smaller_x(&self) -> &F {
         match self {
-            Self::Enter(x) | Self::Exit(x) => x,
+            Self::Point(x) => x,
             Self::Horizontal(x, y) => x.min(y),
         }
     }
 
     pub fn larger_x(&self) -> &F {
         match self {
-            Self::Enter(x) | Self::Exit(x) => x,
+            Self::Point(x) => x,
             Self::Horizontal(x, y) => x.max(y),
+        }
+    }
+
+    pub fn from_points(x0: F, x1: F) -> Self {
+        if x0 == x1 {
+            PositionKind::Point(x0)
+        } else {
+            PositionKind::Horizontal(x0, x1)
         }
     }
 }
@@ -1044,9 +1126,86 @@ struct Position<F: Float> {
     seg_idx: SegIdx,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct PositionIter<F: Float> {
-    positions: Vec<Position<F>>,
+#[derive(Clone, Debug)]
+pub struct PositionIter<F: Float> {
+    last_x: Option<F>,
+    positions: std::vec::IntoIter<Position<F>>,
+    active_horizontals: BTreeSet<HSeg<F>>,
+}
+
+impl<F: Float> PositionIter<F> {
+    pub fn next_x(&self) -> Option<F> {
+        match (
+            self.active_horizontals.first(),
+            self.positions.as_slice().first(),
+        ) {
+            (None, None) => None,
+            (None, Some(pos)) => Some(pos.kind.smaller_x().clone()),
+            (Some(h), None) => Some(h.end.clone()),
+            (Some(h), Some(pos)) => Some(h.end.clone().min(pos.kind.smaller_x().clone())),
+        }
+    }
+
+    // TODO: instead of collecting the output events, we could return something referencing self
+    // that allows iteration
+    pub fn next_events(&mut self, y: &F) -> Option<Vec<OutputEvent<F>>> {
+        let next_x = self.next_x()?;
+
+        let mut ret = Vec::new();
+        for h in &self.active_horizontals {
+            ret.push(OutputEvent {
+                seg: h.seg,
+                y: y.clone(),
+                x: OutputEventKind::Horizontal(
+                    // unwrap: on the first event of this sweep line, active_horizontals is empty. So
+                    // we only get here after last_x is populated.
+                    self.last_x.clone().unwrap(),
+                    next_x.clone().min(h.end.clone()),
+                ),
+                sweep_line_ordered: h.enter_first,
+            });
+        }
+
+        // Drain the active horizontals, throwing away horizontal segments that end before
+        // the new x position.
+        while let Some(h) = self.active_horizontals.first() {
+            if h.end <= next_x {
+                self.active_horizontals.pop_first();
+            } else {
+                break;
+            }
+        }
+
+        while let Some(pos) = self.positions.as_slice().first() {
+            if pos.kind.smaller_x() > &next_x {
+                break;
+            }
+            // unwrap: we just peeked at this element.
+            let pos = self.positions.next().unwrap();
+
+            let sweep_line_ordered = match &pos.kind {
+                PositionKind::Point(_) => true,
+                PositionKind::Horizontal(x0, x1) => x0 < x1,
+            };
+
+            ret.push(OutputEvent {
+                seg: pos.seg_idx,
+                y: y.clone(),
+                x: OutputEventKind::Point(next_x.clone()),
+                sweep_line_ordered,
+            });
+
+            if let PositionKind::Horizontal(_, _) = pos.kind {
+                self.active_horizontals.insert(HSeg {
+                    end: pos.kind.larger_x().clone(),
+                    enter_first: sweep_line_ordered,
+                    seg: pos.seg_idx,
+                });
+            }
+        }
+        self.last_x = Some(next_x);
+        Some(ret)
+    }
 }
 
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
@@ -1061,144 +1220,19 @@ struct PositionIter<F: Float> {
 /// First, in order to test the interface, here is an implementation that
 /// first converts to sweep lines.
 pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
-    weaks: &[(WeakSweepLine<F>, WeakSweepLine<F>)],
+    weaks: &[WeakSweepLinePair<F>],
     segments: &Segments<F>,
     eps: &F,
     mut callback: C,
 ) {
-    let sweeps = weaks_to_sweeps_sparse(weaks, segments, eps);
-
-    for line in sweeps {
-        let mut active_horizontals: BTreeSet<HSeg<F>> = BTreeSet::new();
-        let positions: HashMap<SegIdx, usize> = line
-            .segs
-            .iter()
-            .enumerate()
-            .map(|(pos, seg)| (seg.idx, pos))
-            .collect();
-        let mut last_x: Option<F> = None;
-        for seg in &line.segs {
-            let x = seg.x.smaller_x().clone();
-            for h in &active_horizontals {
-                // unwrap: on the first event of this sweep line, active_horizontals is empty. So
-                // we only get here after last_x is populated.
-                callback(OutputEvent {
-                    seg: h.seg,
-                    y: line.y.clone(),
-                    x: OutputEventKind::Horizontal(
-                        last_x.clone().unwrap(),
-                        h.end.clone().min(x.clone()),
-                        h.enter_first,
-                    ),
-                });
-            }
-
-            // Drain the active horizontals, throwing away horizontal segments that end before
-            // the new x position.
-            while let Some(h) = active_horizontals.first() {
-                if h.end <= x {
-                    let event_x = h.end.clone().min(x.clone());
-                    let kind = if h.enter_first {
-                        OutputEventKind::Exit(event_x)
-                    } else {
-                        OutputEventKind::Enter(event_x)
-                    };
-                    if h.end < x || !h.contour_connector {
-                        callback(OutputEvent {
-                            seg: h.seg,
-                            y: line.y.clone(),
-                            x: kind,
-                        });
-                    }
-                    active_horizontals.pop_first();
-                } else {
-                    break;
+    for line in weaks {
+        for (start, end) in line.changed_intervals(segments, eps) {
+            let mut positions = line.position_range((start, end), segments, eps);
+            while let Some(events) = positions.next_events(&line.new_line.y) {
+                for ev in events {
+                    callback(ev);
                 }
             }
-
-            match &seg.x {
-                SweepLineSeg::Single(x) => {
-                    let s = segments.get(seg.idx);
-                    let kind = match (s.start.y < line.y, line.y < s.end.y) {
-                        (true, false) => OutputEventKind::Enter(x.clone()),
-                        (false, true) => OutputEventKind::Exit(x.clone()),
-                        (true, true) => {
-                            // We'd like this to be unreachable, but it actually gets reached. I think
-                            // it's because of influence_range not always lining up between the previous
-                            // line and the new one.
-                            OutputEventKind::PassThrough(x.clone())
-                        }
-
-                        (false, false) => {
-                            // This now gets hit by horizontal segments. What kind of output event
-                            // should they count as?
-                            OutputEventKind::Exit(x.clone())
-                        }
-                    };
-
-                    callback(OutputEvent {
-                        seg: seg.idx,
-                        y: line.y.clone(),
-                        x: kind,
-                    });
-
-                    let next_nbr = segments.contour_next[seg.idx.0].and_then(|n| positions.get(&n));
-                    if let Some(next_nbr) = next_nbr {
-                        let next_nbr_start = line.segs[*next_nbr].x.smaller_x();
-                        if next_nbr_start > x {
-                            active_horizontals.insert(HSeg {
-                                end: next_nbr_start.clone(),
-                                enter_first: true,
-                                seg: seg.idx,
-                                contour_connector: true,
-                            });
-                        }
-                    }
-
-                    let prev_nbr = segments.contour_prev[seg.idx.0].and_then(|n| positions.get(&n));
-                    if let Some(prev_nbr) = prev_nbr {
-                        let prev_nbr_start = line.segs[*prev_nbr].x.smaller_x();
-                        if prev_nbr_start > x {
-                            active_horizontals.insert(HSeg {
-                                end: prev_nbr_start.clone(),
-                                enter_first: false,
-                                seg: seg.idx,
-                                contour_connector: true,
-                            });
-                        }
-                    }
-                }
-                SweepLineSeg::EnterExit(enter_x, exit_x) => {
-                    let kind = match enter_x.cmp(exit_x) {
-                        std::cmp::Ordering::Less => {
-                            active_horizontals.insert(HSeg {
-                                end: seg.x.larger_x().clone(),
-                                seg: seg.idx,
-                                enter_first: true,
-                                contour_connector: false,
-                            });
-                            OutputEventKind::Enter(enter_x.clone())
-                        }
-                        std::cmp::Ordering::Greater => {
-                            active_horizontals.insert(HSeg {
-                                end: seg.x.larger_x().clone(),
-                                seg: seg.idx,
-                                enter_first: false,
-                                contour_connector: false,
-                            });
-                            OutputEventKind::Exit(exit_x.clone())
-                        }
-                        std::cmp::Ordering::Equal => OutputEventKind::PassThrough(enter_x.clone()),
-                    };
-
-                    callback(OutputEvent {
-                        seg: seg.idx,
-                        y: line.y.clone(),
-                        x: kind,
-                    });
-                }
-            }
-            last_x = Some(x);
         }
     }
 }
@@ -1206,6 +1240,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use malachite::Rational;
     use ordered_float::NotNan;
     use proptest::prelude::*;
 
@@ -1213,7 +1248,8 @@ mod tests {
         geom::{Point, Segment},
         perturbation::{
             f32_perturbation, f64_perturbation, perturbation, rational_perturbation,
-            realize_perturbation, FloatPerturbation, Perturbation,
+            realize_perturbation, FloatPerturbation, Perturbation, PointPerturbation,
+            RationalPerturbation,
         },
         sweep::Segments,
     };
@@ -1435,6 +1471,36 @@ mod tests {
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
+    }
+
+    #[test]
+    fn test_bug() {
+        let perturbations = vec![
+            Perturbation::Point {
+                perturbation: PointPerturbation {
+                    x: RationalPerturbation {
+                        eps: Rational::from(-1457893686036691i64)
+                            / Rational::from(18014398509481984i64),
+                    },
+                    y: RationalPerturbation {
+                        eps: Rational::from(3909005954306809i64)
+                            / Rational::from(144115188075855872i64),
+                    },
+                },
+                idx: 12747050291845847870,
+                next: Box::new(Perturbation::Base { idx: 0 }),
+            },
+            Perturbation::Subdivision {
+                t: 0.into(),
+                idx: 0,
+                next: Box::new(Perturbation::Subdivision {
+                    t: Rational::from(16302861) / Rational::from(16777216),
+                    idx: 9430925221796093068,
+                    next: Box::new(Perturbation::Base { idx: 0 }),
+                }),
+            },
+        ];
+        run_perturbation(perturbations);
     }
 
     proptest! {
