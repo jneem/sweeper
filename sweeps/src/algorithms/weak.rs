@@ -266,8 +266,7 @@ impl<F: Float> State<F> {
                 let pos = self.line.insertion_idx(&self.segments, new_seg, &self.eps);
                 self.insert(pos, seg_idx);
                 self.line.segs_needing_positions.insert(seg_idx);
-                self.line
-                    .mark_contour_neighbor(seg_idx, true, &self.segments);
+                self.line.mark_endpoint(seg_idx, pos, true, &self.segments);
                 self.line.entrances.insert(seg_idx);
             }
             SweepEventKind::Exit(seg_idx) => {
@@ -277,8 +276,7 @@ impl<F: Float> State<F> {
                     .expect("exit for a segment we don't have");
                 self.scan_for_removal(pos);
                 self.line.segs_needing_positions.insert(seg_idx);
-                self.line
-                    .mark_contour_neighbor(seg_idx, false, &self.segments);
+                self.line.mark_endpoint(seg_idx, pos, false, &self.segments);
                 self.line.exits.insert(seg_idx);
             }
             SweepEventKind::Intersection { left, right } => {
@@ -585,27 +583,24 @@ impl<F: Float> WeakSweepLine<F> {
         Some(start_idx..end_idx)
     }
 
-    fn mark_contour_neighbor(&mut self, idx: SegIdx, enter: bool, segments: &Segments<F>) {
-        let nbr = if segments.positively_oriented(idx) == enter {
-            segments.contour_prev[idx.0]
+    fn mark_endpoint(&mut self, idx: SegIdx, pos: usize, enter: bool, segments: &Segments<F>) {
+        let x = if enter {
+            &segments.get(idx).start.x
         } else {
-            segments.contour_next[idx.0]
+            &segments.get(idx).end.x
         };
-        let Some(nbr) = nbr else {
-            return;
-        };
-
-        let seg_pos = self.position(idx);
-        let nbr_pos = self.position(nbr);
-        let Some((seg_pos, nbr_pos)) = seg_pos.zip(nbr_pos) else {
-            return;
-        };
-
-        self.segs_needing_positions.extend(
-            self.segs[seg_pos.min(nbr_pos)..=seg_pos.max(nbr_pos)]
-                .iter()
-                .copied(),
-        );
+        for &seg_idx in &self.segs[(pos + 1)..] {
+            if segments.get(seg_idx).at_y_bound(&self.y).lower > *x {
+                break;
+            }
+            self.segs_needing_positions.insert(seg_idx);
+        }
+        for &seg_idx in self.segs[0..pos].iter().rev() {
+            if segments.get(seg_idx).at_y_bound(&self.y).upper < *x {
+                break;
+            }
+            self.segs_needing_positions.insert(seg_idx);
+        }
     }
 
     /// Return all the segments in this sweep-line, along with a valid x position.
@@ -719,8 +714,53 @@ impl<F: Float> WeakSweepLinePair<F> {
             ret.push((start_idx, end_idx))
         }
         ret.sort();
-        ret
+
+        // By merging adjacent intervals, we ensure that there is no horizontal segment
+        // that spans two ranges. That's because horizontal segments mark everything they
+        // cross as needing a position. Any collection of subranges that are crossed by
+        // a horizontal segment are therefore adjacent and will be merged here.
+        merge_adjacent(ret)
     }
+
+    // idea: rather than connecting segments to their contour neighbors directly, connect
+    // the positioned endpoint to the actual endpoint.
+    fn position_range(
+        &self,
+        range: (usize, usize),
+        segments: &Segments<F>,
+        eps: &F,
+    ) -> PositionIter<F> {
+        let old_xs = self
+            .old_line
+            // TODO: decide whether to use (usize, usize) or std::ops::Range or something else
+            .ordered_partial_xs(range.0..range.1, segments, eps);
+        let new_xs = self
+            .new_line
+            .ordered_partial_xs(range.0..range.1, segments, eps);
+
+        todo!()
+    }
+}
+
+/// Given a sorted list of disjoint, endpoint-exclusive intervals, merge adjacent ones.
+///
+/// For example, [1..2, 4..5, 5..6] is turned into [1..2, 4..6].
+fn merge_adjacent(intervals: impl IntoIterator<Item = (usize, usize)>) -> Vec<(usize, usize)> {
+    let mut intervals = intervals.into_iter();
+    let mut ret = Vec::new();
+    let Some(mut last) = intervals.next() else {
+        return ret;
+    };
+    for iv in intervals {
+        if last.1 < iv.0 {
+            ret.push(last);
+            last = iv;
+        } else {
+            last.1 = iv.1;
+        }
+    }
+    ret.push(last);
+    ret
 }
 
 /// Runs a sweep over all the segments, returning a sweep line at every `y` where
@@ -989,6 +1029,55 @@ struct HSeg<F: Float> {
     seg: SegIdx,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PositionKind<F: Float> {
+    Enter(F),
+    Exit(F),
+    // The two points are in sweep-line order. TODO: document more carefully what this means.
+    Horizontal(F, F),
+}
+
+impl<F: Float> PositionKind<F> {
+    pub fn smaller_x(&self) -> &F {
+        match self {
+            Self::Enter(x) | Self::Exit(x) => x,
+            Self::Horizontal(x, y) => x.min(y),
+        }
+    }
+
+    pub fn larger_x(&self) -> &F {
+        match self {
+            Self::Enter(x) | Self::Exit(x) => x,
+            Self::Horizontal(x, y) => x.max(y),
+        }
+    }
+}
+
+impl<F: Float> Ord for PositionKind<F> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.smaller_x()
+            .cmp(other.smaller_x())
+            .then_with(|| self.larger_x().cmp(other.larger_x()))
+    }
+}
+
+impl<F: Float> PartialOrd for PositionKind<F> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
+struct Position<F: Float> {
+    kind: PositionKind<F>,
+    seg_idx: SegIdx,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PositionIter<F: Float> {
+    positions: Vec<Position<F>>,
+}
+
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
 /// of actual sweep lines, while trying not to add in two many subdivisions.
 ///
@@ -1169,6 +1258,21 @@ mod tests {
             );
         }
         segs
+    }
+
+    #[test]
+    fn merge_adjacent() {
+        assert_eq!(
+            super::merge_adjacent([(1, 2), (3, 4)]),
+            vec![(1, 2), (3, 4)]
+        );
+
+        assert_eq!(super::merge_adjacent([(1, 2), (2, 4)]), vec![(1, 4)]);
+
+        assert_eq!(
+            super::merge_adjacent([(1, 2), (3, 4), (4, 5)]),
+            vec![(1, 2), (3, 5)]
+        );
     }
 
     #[test]
