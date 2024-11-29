@@ -36,10 +36,6 @@ pub struct WeakSweepLine<F: Float> {
     // - any segments that entered or exited
     // - any segments that are between the endpoints of contour-adjacent segments.
     pub segs_needing_positions: HashSet<SegIdx>,
-    // The horizontal segments present at the current sweep line. These aren't
-    // included with the usual `segs` because it's easier (and probably faster)
-    // to give them special treatment.
-    pub horizontals: Vec<SegIdx>,
     // Segments marked as having exited the sweep-line. We don't remove them
     // immediately because that shifts indices around and makes it harder to
     // compare old vs. new sweep-lines. Instead, we remember that we're supposed
@@ -61,7 +57,6 @@ impl<F: Float> WeakSweepLine<F> {
             y,
             segs,
             segs_needing_positions: HashSet::new(),
-            horizontals: Vec::new(),
             exits: HashSet::new(),
             entrances: HashSet::new(),
         }
@@ -136,7 +131,6 @@ impl<F: Float> State<F> {
         self.process_exits();
         self.line.y = y;
         self.line.segs_needing_positions.clear();
-        self.line.horizontals.clear();
         self.line.entrances.clear();
     }
 
@@ -318,7 +312,14 @@ impl<F: Float> State<F> {
                 }
             }
             SweepEventKind::Horizontal(seg_idx) => {
-                self.line.horizontals.push(seg_idx);
+                let new_seg = self.segments.get(seg_idx);
+                let pos = self.line.insertion_idx(&self.segments, new_seg, &self.eps);
+                self.insert(pos, seg_idx);
+                self.line.segs_needing_positions.insert(seg_idx);
+                self.line.mark_endpoint(seg_idx, pos, true, &self.segments);
+                self.line.mark_endpoint(seg_idx, pos, false, &self.segments);
+                self.line.entrances.insert(seg_idx);
+                self.line.exits.insert(seg_idx);
             }
         }
     }
@@ -393,7 +394,12 @@ impl<F: Float> Segment<F> {
     // because it's possible to compute exactly when doing rational
     // arithmetic.
     fn scaled_eps(&self, eps: &F) -> F {
-        assert!(self.start.y < self.end.y);
+        assert!(self.start.y <= self.end.y);
+        if self.start.y == self.end.y {
+            // See `scaled_eps_bound`
+            return eps.clone();
+        }
+
         let dx = (self.end.x.clone() - &self.start.x).abs();
         let dy = self.end.y.clone() - &self.start.y;
 
@@ -509,35 +515,6 @@ impl<F: Float> WeakSweepLine<F> {
             }
         }
         idx
-    }
-
-    /// Marks as re-ordered all segments in the weakly-ordered sweep line that
-    /// might intersect any horizontal segment.
-    fn add_horizontal_reorders(&mut self, segments: &Segments<F>, eps: &F) {
-        for &h_idx in &self.horizontals {
-            let h_seg = segments.get(h_idx);
-
-            // If there's a segment whose upper bound is less than seg.start.x, we
-            // can ignore all it and everything to its left (even if those things to
-            // its left have a bigger upper bound).
-            //
-            // Like in `WeakSweepLine::insertion_idx`, we're abusing the guarantees of
-            // the stdlib binary search: the segments aren't guaranteed to be ordered,
-            // but this should still find some index that evaluated to false, but whose
-            // predecessor evaluated to true.
-            let start_idx = self.segs.partition_point(|idx| {
-                segments.get(*idx).upper_bound(&self.y, eps).upper < h_seg.start.x
-            });
-
-            for idx in &self.segs[start_idx..] {
-                // We can stop once we've found a segment whose lower bound is definitely
-                // past the horizontal segment.
-                if segments.get(*idx).lower_bound(&self.y, eps).lower > h_seg.end.y {
-                    break;
-                }
-                self.segs_needing_positions.insert(*idx);
-            }
-        }
     }
 
     // Find the position of the given segment in our array.
@@ -814,7 +791,6 @@ pub fn sweep<F: Float>(
             state.step();
             state.check_invariants();
         }
-        state.line.add_horizontal_reorders(segments, eps);
 
         // Process all the exit events at this y.
         while state.events.next_is_at(&y) {
@@ -870,8 +846,6 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             .collect(),
     };
 
-    first_line.add_horizontals(&weaks[0].1.horizontals, segments);
-
     let mut ret = vec![first_line];
 
     for (prev, line) in &weaks[1..] {
@@ -907,7 +881,6 @@ pub fn weaks_to_sweeps_dense<F: Float>(
             y: line.y.clone(),
             segs: entries,
         };
-        sweep_line.add_horizontals(&line.horizontals, segments);
         sweep_line.segs.sort();
         ret.push(sweep_line);
     }
@@ -934,7 +907,6 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
             })
             .collect(),
     };
-    first_line.add_horizontals(&weaks[0].1.horizontals, segments);
 
     let mut ret = vec![first_line];
 
@@ -992,7 +964,6 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
             y: line.y.clone(),
             segs: entries,
         };
-        sweep_line.add_horizontals(&line.horizontals, segments);
         sweep_line.segs.sort();
         ret.push(sweep_line);
     }
@@ -1158,7 +1129,11 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
                             OutputEventKind::PassThrough(x.clone())
                         }
 
-                        (false, false) => unreachable!(),
+                        (false, false) => {
+                            // This now gets hit by horizontal segments. What kind of output event
+                            // should they count as?
+                            OutputEventKind::Exit(x.clone())
+                        }
                     };
 
                     callback(OutputEvent {

@@ -110,7 +110,7 @@ impl<F: Float> Segment<F> {
 
         let denom = Bounds::single(self.end.y.clone()) - Bounds::single(self.start.y.clone());
         let zero = F::from_f32(0.0);
-        if denom.lower == zero {
+        if denom.lower <= zero {
             Bounds::from_pair(self.start.x.clone(), self.end.x.clone())
         } else {
             let t = (Bounds::single(y.clone()) - Bounds::single(self.start.y.clone()))
