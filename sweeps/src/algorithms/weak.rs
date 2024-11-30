@@ -1048,26 +1048,6 @@ pub fn weaks_to_sweeps_sparse<F: Float>(
     ret
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OutputEventKind<F: Float> {
-    Point(F),
-    // Potentially, we could divide this variant up into:
-    // - part of a real horizontal segment
-    // - a horizontal part of a segment that continues through this sweep line
-    // - a horizontal bit introduced to join two adjacent parts of the contour.
-    Horizontal(F, F),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OutputEvent<F: Float> {
-    pub seg: SegIdx,
-    pub y: F,
-    pub x: OutputEventKind<F>,
-    // The bool is true if the order of this segment agrees with the sweep-order
-    // (not the oriented order!) of the segment it's a part of.
-    pub sweep_line_ordered: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HSeg<F: Float> {
     end: F,
@@ -1076,9 +1056,14 @@ struct HSeg<F: Float> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum PositionKind<F: Float> {
+pub enum PositionKind<F: Float> {
     Point(F),
-    // The two points are in sweep-line order. TODO: document more carefully what this means.
+    /// The two points are in sweep-line order.
+    ///
+    /// This doesn't necessarily mean that the first point (call it `x0`) is
+    /// smaller than the second (`x1`)! Instead, it means that when traversing
+    /// the segment in sweep-line order (i.e. in increasing `y`, and increasing
+    /// `x` if the segment is horizontal) then it visits `x0` before `x1`.
     Horizontal(F, F),
 }
 
@@ -1121,9 +1106,9 @@ impl<F: Float> PartialOrd for PositionKind<F> {
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
-struct Position<F: Float> {
-    kind: PositionKind<F>,
-    seg_idx: SegIdx,
+pub struct Position<F: Float> {
+    pub kind: PositionKind<F>,
+    pub seg_idx: SegIdx,
 }
 
 #[derive(Clone, Debug)]
@@ -1148,21 +1133,21 @@ impl<F: Float> PositionIter<F> {
 
     // TODO: instead of collecting the output events, we could return something referencing self
     // that allows iteration
-    pub fn next_events(&mut self, y: &F) -> Option<Vec<OutputEvent<F>>> {
+    pub fn next_events(&mut self) -> Option<Vec<Position<F>>> {
         let next_x = self.next_x()?;
 
         let mut ret = Vec::new();
         for h in &self.active_horizontals {
-            ret.push(OutputEvent {
-                seg: h.seg,
-                y: y.clone(),
-                x: OutputEventKind::Horizontal(
-                    // unwrap: on the first event of this sweep line, active_horizontals is empty. So
-                    // we only get here after last_x is populated.
-                    self.last_x.clone().unwrap(),
-                    next_x.clone().min(h.end.clone()),
-                ),
-                sweep_line_ordered: h.enter_first,
+            // unwrap: on the first event of this sweep line, active_horizontals is empty. So
+            // we only get here after last_x is populated.
+            let mut x0 = self.last_x.clone().unwrap();
+            let mut x1 = next_x.clone().min(h.end.clone());
+            if !h.enter_first {
+                std::mem::swap(&mut x0, &mut x1);
+            }
+            ret.push(Position {
+                seg_idx: h.seg,
+                kind: PositionKind::Horizontal(x0, x1),
             });
         }
 
@@ -1183,24 +1168,21 @@ impl<F: Float> PositionIter<F> {
             // unwrap: we just peeked at this element.
             let pos = self.positions.next().unwrap();
 
-            let sweep_line_ordered = match &pos.kind {
-                PositionKind::Point(_) => true,
-                PositionKind::Horizontal(x0, x1) => x0 < x1,
-            };
-
-            ret.push(OutputEvent {
-                seg: pos.seg_idx,
-                y: y.clone(),
-                x: OutputEventKind::Point(next_x.clone()),
-                sweep_line_ordered,
-            });
-
-            if let PositionKind::Horizontal(_, _) = pos.kind {
-                self.active_horizontals.insert(HSeg {
-                    end: pos.kind.larger_x().clone(),
-                    enter_first: sweep_line_ordered,
-                    seg: pos.seg_idx,
-                });
+            match pos.kind {
+                PositionKind::Point(x) => {
+                    ret.push(Position {
+                        seg_idx: pos.seg_idx,
+                        kind: PositionKind::Point(x),
+                    });
+                }
+                PositionKind::Horizontal(x0, x1) => {
+                    let enter_first = x0 < x1;
+                    self.active_horizontals.insert(HSeg {
+                        end: x0.max(x1),
+                        enter_first,
+                        seg: pos.seg_idx,
+                    });
+                }
             }
         }
         self.last_x = Some(next_x);
@@ -1219,7 +1201,7 @@ impl<F: Float> PositionIter<F> {
 ///
 /// First, in order to test the interface, here is an implementation that
 /// first converts to sweep lines.
-pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
+pub fn weaks_to_events_sparse<F: Float, C: FnMut(F, Position<F>)>(
     weaks: &[WeakSweepLinePair<F>],
     segments: &Segments<F>,
     eps: &F,
@@ -1228,9 +1210,9 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
     for line in weaks {
         for (start, end) in line.changed_intervals(segments, eps) {
             let mut positions = line.position_range((start, end), segments, eps);
-            while let Some(events) = positions.next_events(&line.new_line.y) {
+            while let Some(events) = positions.next_events() {
                 for ev in events {
-                    callback(ev);
+                    callback(line.new_line.y.clone(), ev);
                 }
             }
         }
@@ -1240,7 +1222,7 @@ pub fn weaks_to_events_sparse<F: Float, C: FnMut(OutputEvent<F>)>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use malachite::Rational;
+
     use ordered_float::NotNan;
     use proptest::prelude::*;
 
@@ -1248,8 +1230,7 @@ mod tests {
         geom::{Point, Segment},
         perturbation::{
             f32_perturbation, f64_perturbation, perturbation, rational_perturbation,
-            realize_perturbation, FloatPerturbation, Perturbation, PointPerturbation,
-            RationalPerturbation,
+            realize_perturbation, FloatPerturbation, Perturbation,
         },
         sweep::Segments,
     };
@@ -1397,7 +1378,7 @@ mod tests {
         dbg!(&lines);
         assert_eq!(4, lines.len());
         //dbg!(&weaks_to_sweeps_dense(&lines, &segs, &eps));
-        weaks_to_events_sparse(&lines, &segs, &eps, |ev| {
+        weaks_to_events_sparse(&lines, &segs, &eps, |_, ev| {
             dbg!(ev);
         });
     }
@@ -1471,36 +1452,6 @@ mod tests {
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
         let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
-    }
-
-    #[test]
-    fn test_bug() {
-        let perturbations = vec![
-            Perturbation::Point {
-                perturbation: PointPerturbation {
-                    x: RationalPerturbation {
-                        eps: Rational::from(-1457893686036691i64)
-                            / Rational::from(18014398509481984i64),
-                    },
-                    y: RationalPerturbation {
-                        eps: Rational::from(3909005954306809i64)
-                            / Rational::from(144115188075855872i64),
-                    },
-                },
-                idx: 12747050291845847870,
-                next: Box::new(Perturbation::Base { idx: 0 }),
-            },
-            Perturbation::Subdivision {
-                t: 0.into(),
-                idx: 0,
-                next: Box::new(Perturbation::Subdivision {
-                    t: Rational::from(16302861) / Rational::from(16777216),
-                    idx: 9430925221796093068,
-                    next: Box::new(Perturbation::Base { idx: 0 }),
-                }),
-            },
-        ];
-        run_perturbation(perturbations);
     }
 
     proptest! {

@@ -5,8 +5,9 @@
 
 #show: thmrules
 #let lemma = thmbox("lemma", "Lemma")
-#let def = thmbox("definition", "Definition")
+#let def = thmbox("lemma", "Definition")
 #let proof = thmproof("proof", "Proof")
+#let remark = thmbox("lemma", "Remark")
 
 #let inexact(term) = {
   block(inset: 16pt,
@@ -46,7 +47,8 @@ We write $theta_alpha$ for the angle that $alpha$ makes with the positive horizo
 Let's have a picture. (In the discussion, it won't matter whether positive $y$ points up or down, but in the
 pictures we'll adopt the graphics convention of having positive $y$ point down.)
 
-#cetz.canvas({
+#figure(
+cetz.canvas({
   import cetz.draw: *
 
   line((1, 3), (0, 0), name: "a")
@@ -57,13 +59,16 @@ pictures we'll adopt the graphics convention of having positive $y$ point down.)
   content((0.6, 1.5), $alpha$, anchor: "west")
 
   cetz.angle.angle("a.start", "a.end", (4, 3), label: $theta_alpha$, label-radius: 0.8)
-})
+}),
+
+caption: "A segment and its angle"
+)
 
 We'll be dealing with inexact arithmetic, so let's define some "error bars" on our line segments.
 For an error parameter $epsilon > 0$, offsetting from $alpha$ by $plus.minus epsilon$ in the perpendicular-to-$alpha$ direction
 is the same as offsetting by $alpha plus.minus epsilon / (|cos theta_alpha|)$ in the horizontal direction.
 Roughly speaking, the "error bars" on $alpha$ amount to adding this horizontal error. But we'll be slightly
-more accurate around the corners, by truncating these error bars to the horizontal extends of $alpha$. Precisely, we define
+more accurate around the corners, by truncating these error bars to the horizontal extents of $alpha$. Precisely, we define
 
 $
 alpha_(+,epsilon)(y) = min(alpha(y) + epsilon / (|cos theta_alpha|), max(alpha(y_0), alpha(y_1)) + epsilon) \
@@ -75,7 +80,8 @@ The point of the scaling by $|cos theta_alpha|$ is to make this an approximation
 perpendicular direction) of the line segment. The truncation near the corners ensures that if $x$ is between
 $alpha_(-,epsilon)(y)$ and $alpha_(+,epsilon)(y)$ then it is within $sqrt(2) epsilon$ of $alpha$.
 
-#cetz.canvas({
+#figure(
+cetz.canvas({
   import cetz.draw: *
 
   line((0.5, 3), (-0.3, 0.6), (-0.3, 0), (0.5, 0), (1.3, 2.4), (1.3, 3), close: true, fill: gray, stroke: 0pt)
@@ -91,7 +97,9 @@ $alpha_(-,epsilon)(y)$ and $alpha_(+,epsilon)(y)$ then it is within $sqrt(2) eps
 
   content((0.8, 0.5), $alpha_(+,epsilon)$, anchor: "west")
   content((0.2, 2.4), $alpha_(-,epsilon)$, anchor: "east")
-})
+}),
+caption: "A segment and its error bars"
+)<fig-error-bars>
 
 
 Define a relation $prec_(y,epsilon)$ on line segments whose domain contains $y$, where
@@ -122,16 +130,11 @@ Since $epsilon$ for us will usually be fixed, we will often drop it from the not
 of $alpha_(-,epsilon)$ and $alpha_(+,epsilon)$.
 
 #def[
-  Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$alpha$ and $beta$
-  are $epsilon$-close from $y$ onwards* if
-  $alpha approx_(z,epsilon) beta$
-  for all $y <= z <= min(y_1(alpha), y_1(beta))$.
-] <close_from_y_onwards>
-
-#def[
   Suppose $alpha$ and $beta$ are two segments whose domain contains $y$. We say that *$(alpha, beta)$
   $epsilon$-cross by $y$* if $y$ belongs to both domains and $alpha succ_(y,epsilon) beta$.
   We say that *$(alpha, beta)$ $epsilon$-cross* if they $epsilon$-cross by $min(y_1 (alpha), y_1 (beta))$.
+
+  When $epsilon$ is zero, we leave it out: we say that $(alpha, beta)$ cross by $y$ if they $0$-cross by $y$.
 ]
 
 Note that the definition of $epsilon$-crossing is not symmetric: $(alpha, beta)$ $epsilon$-crossing is
@@ -155,12 +158,12 @@ Our algorithm will produce a family of sweep-lines that are $epsilon$-ordered at
 domain contains $y$). This seems weaker than finding all the intersections (for example, because if you
 find all intersections you can use them to produce a completely ordered family of sweep-lines), but
 in fact they're more-or-less equivalent: given weakly-ordered sweep-lines, you can perturb the lines so
-that your previously-weak order becomes a real order:
+that your weak order becomes the real order of the perturbed lines.
 
 #lemma[
 If $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$ then there exist $x^1 <= ... <= x^m$ such that
 $alpha_(-,epsilon)^i (y) <= x^i <= alpha_(+,epsilon)^i (y)$ for all $i$.
-]
+]<lem-horizontal-realization>
 
 #proof[
 Define $x^i = max_(j <= i) alpha_(-,epsilon)^j (y)$.
@@ -168,9 +171,6 @@ Since we've included $j = i$, this clearly satisfies $x^i >= alpha_(-,epsilon)^j
 For the other inequality, the ordering condition implies that $alpha^j_(-,epsilon) (y) <= alpha^i_(+,epsilon) (y)$
 for every $j <= i$. Therefore this inequality still holds for the maximum over these $j$. 
 ]
-
-So once we have our family of approximate sweep-lines, we can go back and perturb the lines so that our
-approximate ordering is exact.
 
 One consequence of our approximate approach is that we need to do a little extra bookkeeping to maintain
 the continuity of the input paths: when one segment exits and its path-neighbor enters, we need to remember
@@ -227,9 +227,58 @@ to the next event:
 
 In vanilla Bentley-Ottmann, each segment gets compared to its two sweep-line neighbors; they can either intersect or not intersect.
 When numerical errors are taken into account, we may need to compare to
-more segments. TODO: draw an example with three segments.
+more segments.
 
-TODO: define a crossing that isn't an $epsilon$-crossing. (The definition is probably what you'd guess.)
+#figure(
+cetz.canvas({
+  import cetz.draw: *
+
+  let calc_eps(x0, x1) = 0.5 * calc.sqrt(1 + calc.pow(calc.abs(x1 - x0) / 2, 2))
+
+  let mkline(x0, x1) = {
+    let eps = calc_eps(x0, x1)
+    line((x0, 1), (x1, -1))
+    line((x0 + eps, 1), (x1 + eps, -1), stroke: ( thickness: 0.2pt, dash: "dashed" ))
+    line((x0 - eps, 1), (x1 - eps, -1), stroke: ( thickness: 0.2pt, dash: "dashed" ))
+  }
+
+  let a0 = -8
+  let a1 = 8
+  let b0 = -2
+  let b1 = 2
+  let c0 = 0.5
+  let c1 = 0.5
+
+  content((a0, 1), $alpha^1$, anchor: "south", padding: 5pt)
+  content((b0, 1), $alpha^2$, anchor: "south", padding: 5pt)
+  content((c0, 1), $alpha^3$, anchor: "south", padding: 5pt)
+
+  mkline(a0, a1)
+  mkline(b0, b1)
+  mkline(c0, c1)
+
+  let a_eps = calc_eps(a0, a1)
+  let b_eps = calc_eps(b0, b1)
+  let c_eps = calc_eps(c0, c1)
+  let cross12 = 1 - 2*(b0 + b_eps - a0 + a_eps) / (b0 - a0 - (b1 - a1))
+  let cross13 = 1 - 2*(c0 + c_eps - a0 + a_eps) / (c0 - a0 - (c1 - a1))
+
+  line((-10, cross13), (10, cross13), stroke: ( thickness: 0.2pt ))
+  line((-10, cross12), (10, cross12), stroke: ( thickness: 0.2pt ))
+}),
+caption: [Three segments all mixed up. The upper horizontal line is the height at which $(alpha^1, alpha^3)$ $epsilon$-cross,
+and the lower horizontal line is the height at which $(alpha^1, alpha^2)$ $epsilon$-cross.]
+)<mixed-up-segments>
+
+For example, in @mixed-up-segments imagine that $alpha^1$ and $alpha^2$
+are present in the sweep line, and we just added $alpha^3$. If we compare
+$alpha^3$ to $alpha^2$, we'll see that the $epsilon$-cross and so we'll add an
+intersection event between them sometime betfore they $epsilon$-cross. But if
+that's all we do then we're in trouble, because by the time we come around to
+looking at that intersection event $alpha^1$ may have already $epsilon$-crossed
+$alpha^3$, breaking the ordering invariant. Note that $alpha^2$ doesn't
+$epsilon$-cross $alpha^3$ at all in @mixed-up-segments, so there's no guarantee of
+an intersection event between those two.
 
 Fix $y$ and $epsilon$, and
 suppose we have a collection of lines $(alpha^i, ..., alpha^n)$ that satisfy the ordering invariant
@@ -243,7 +292,7 @@ We call this an *intersection scan to the right*.
     + *for* $j = i+1$ up to $n$
       + #line-label(<w-def>) let $w^j$ be the smallest height of any event between $i$ and $j$
 
-      + *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
+      + #line-label(<crossing-test>) *if* $(alpha^i, alpha^j_(+,epsilon))$ cross by $w^j$
         + choose $z$ before the crossing, such that $alpha^i approx_(z,epsilon) alpha^j$
         + insert an intersection event for $(alpha^i, alpha^j)$ at $z$
 
@@ -255,7 +304,7 @@ We call this an *intersection scan to the right*.
 
 #inexact[
 The test at @protect can be seen as an early-stopping optimization, and is not necessary for correctness.
-In particular, if it is difficult to evaluate the test exactly then an approximation with no false positives
+In particular, an approximation with no false positives
 is also fine.
 ]
 
@@ -291,6 +340,23 @@ $(alpha^i_(-,epsilon), alpha^j_(+,epsilon))$ cross.)
   - If the loop included the case $j = k$, we break into two more cases:
     - If $(alpha^i, alpha^k_(+,epsilon))$ cross by $w^j$, then the algorithm inserted a witnessing event between $i$ and $j$.
     - Otherwise, the definition of $w^j$ ensures that there is an event between $i$ and $j$ before the crossing.
+]
+
+#remark[
+We can tweak the algorithm a little to try and reduce the number of comparisons.
+For a start, if we add an intersection event between $i$ and $j$ then we can
+set $w^j$ to $z$, the height of that new event (because $z$ is the new smallest
+height of any event between $i$ and $j$).
+Therefore, if we broaden the test @crossing-test to check whether $(alpha^i,
+alpha^j_-)$ cross, and we choose $z$ to be before the crossing of $(alpha^i,
+alpha^j_-)$ then we can skip the test at @protect and terminate straight away.
+Thus, there is no loop at all: we only need to consider $j = i + 1$.
+
+One potential issue with this is finding a height $z$ with $alpha^i approx_(z,epsilon) alpha^j$
+that's before $(alpha^i, alpha^j_-)$ cross; in other words, we want a height after $(alpha^i_+, alpha^j_-)$
+cross but before $(alpha^i, alpha^j_-)$ cross. If $alpha^j$ is almost horizontal, this window might be very
+small (or maybe even not representable with our restricted precision).
+It may still be worthwhile to have a fast path with a single comparison, and a slow path with a loop.
 ]
 
 As you might have already guessed, we can also intersection scan to the left; it's pretty much a reflection
@@ -456,9 +522,68 @@ after each insertion and deletion correctly maintains the crossing invariant, so
 
 = Full correctness
 
-TODO: write what full correctness means and explain how to get it.
+We've described how to turn a bunch of segments into a continuum of sweep-lines, but we probably actually wanted
+to find the segments' intersection points. Let's define exactly what that means and how to get there.
+We'll assume that we start with one or more polylines that may or may not be closed. Equivalently, each segment
+comes with an orientation and (optionally) a "following" segment whose starting point is the ending point of the
+current segment.
+Our goal is to subdivide all segments at all intersection points, meaning that for each segment we'll produce
+a polyline; we'll call the segments in each such polyline "output segments," to distinguish them from
+the original segments. We require three properties:
 
-- important heights are where the sweep-line order changes *or* there's some enter/exit that's within $epsilon$ of
-  an existing line
-- first do a dense version, where we insert points for every segment at every important height
-- the "old" sweep line tells us where we need horizontal segments
+- "approximation": for each input segment, every vertex in its output polyline must be within $epsilon$ of the original segment.
+  Also the first and last vertices in the output polyline must be within $epsilon$ of the start and end of the segment, respectively.
+- "continuity": if a segment has a following segment, then the last vertex in its output polyline must coincide
+  with the first vertex of the following segment's output polyline.
+- "completeness": output segments intersect only at their endpoints, unless they are identical.
+
+In the solution we describe, we'll achieve both continuity and the second half
+of approximation by insisting that output polylines have exactly the same start-
+and endpoints as their input segment. This stronger condition makes the algorithm
+simpler, but it also subjectively can hurt output "quality" by requiring more segments.
+
+== The "dense" version
+
+Suppose we've already found a weakly-ordered sweep line at every height. We say
+a height is "important" if the sweep line changed at that height, either because
+some segments entered or exited, or because the order changed. The naive version
+of our subdivision algorithm will subdivide every segment at every important
+height. Note that because the sweep line changes at a discrete set of heights,
+at every important height $y$ we actually have two weakly-ordered sweep line:
+the "old" one from infinitesmally before $y$ height and the "new" one from $y$
+onwards. Because everything is continuous and the weak ordering conditions are
+closed, both the old and new sweep lines satisfy the weak ordering conditions
+at $y$.
+
+The algorithm goes like this: at every important height we use
+@lem-horizontal-realization to assign horizontal positions to segments in the
+old sweep line; we subdivide each segment at the resulting coordinate. Then we
+use @lem-horizontal-realization again to assign horizontal positions to segments
+in the new sweep line. If a segment gets assigned two different horizontal positions
+by the old and new sweep lines, we add a horizontal segment between them. Also,
+if a segment starts or ends at the current height and its assigned position is not the
+same as its starting or ending position, we fix that up with another horizontal segment.
+Finally, we subdivide all horizontal segments as necessary to ensure that they only
+intersect at endpoints.
+
+I think it's pretty clear that this algorithm is correct. The approximation property
+holds (with $sqrt 2 epsilon$ instead of $epsilon$, but that doesn't matter) because
+@lem-horizontal-realization always puts a new point within its segment's upper and lower bounds,
+and the bounds are chosen to be within $sqrt 2 epsilon$ of the segment; see @fig-error-bars.
+As mentioned above, the "continuity" property and the other half of "approximation" follow
+because we insisted on including the segment endpoints exactly.
+
+For the "completeness" property, let's focus on the bit between the important heights
+(because everything gets subdivided at the important heights, and so maintaining the
+completeness property there is just a matter of splitting into enough horizontal segements).
+Between two important heights, the sweep line is constant, so the new sweep line
+at the old height is the same as the old sweep line at the new height. Thus, all output
+subsegments have the same order when leaving the old sweep line as they do when entering
+the new sweep line. Therefore any two of them that intersect between the two important
+heights must be identical.
+
+== The "sparse" version
+
+We'd like to avoid subdividing every segment at every important height. This basically
+involves detecting which segments need to be divided and ignoring the rest. It's implemented
+but not yet written up (TODO).
