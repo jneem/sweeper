@@ -979,15 +979,6 @@ impl<F: Float> PositionIter<F> {
 
 /// Converts a sequence of weakly-ordered sweep lines into a sequence
 /// of actual sweep lines, while trying not to add in two many subdivisions.
-///
-/// TODO: I started doing trying the lazy version of this, but I think it will
-/// be easier with a refactored weak sweep structure. If we snapshot the line
-/// (1) after the enter events, and (2) after the intersection events but before
-/// the exit events, then the indices between the two snapshots will line up,
-/// and make it easier to do the sparse processing to both lines at once.
-///
-/// First, in order to test the interface, here is an implementation that
-/// first converts to sweep lines.
 pub fn weaks_to_events_sparse<F: Float, C: FnMut(F, Position<F>)>(
     weaks: &[WeakSweepLinePair<F>],
     segments: &Segments<F>,
