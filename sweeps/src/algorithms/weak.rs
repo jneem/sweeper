@@ -901,153 +901,6 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair
     ret
 }
 
-/// Converts a sequence of weakly-ordered sweep lines into a sequence
-/// of actual sweep lines, in the naivest possibly way: subdividing every
-/// segment at every sweep line.
-pub fn weaks_to_sweeps_dense<F: Float>(
-    weaks: &[WeakSweepLinePair<F>],
-    segments: &Segments<F>,
-    eps: &F,
-) -> Vec<SweepLine<F>> {
-    // The first sweep-line just has a single entry for everything
-    let first_line = SweepLine {
-        y: weaks[0].new_line.y.clone(),
-        segs: weaks[0]
-            .new_line
-            .ordered_xs(segments, eps)
-            .map(|(idx, x)| SweepLineEntry {
-                idx,
-                x: SweepLineSeg::Single(x),
-            })
-            .collect(),
-    };
-
-    let mut ret = vec![first_line];
-
-    for WeakSweepLinePair { old_line, new_line } in &weaks[1..] {
-        // TODO: should be able to build things up in order by iterating over
-        // both `prev` and `line` in one pass. But it isn't quite trivial
-        // because we need to keep track of segments that were in one but
-        // haven't yet been encountered in the other.
-        let mut entries: HashMap<_, _> = old_line
-            .ordered_xs(segments, eps)
-            .map(|(idx, x)| (idx, SweepLineSeg::Single(x)))
-            .collect();
-
-        for (idx, x) in new_line.ordered_xs(segments, eps) {
-            match entries.entry(idx) {
-                std::collections::hash_map::Entry::Occupied(mut occ) => {
-                    let SweepLineSeg::Single(enter_x) = occ.get().clone() else {
-                        unreachable!()
-                    };
-                    *occ.get_mut() = SweepLineSeg::EnterExit(enter_x, x);
-                }
-                std::collections::hash_map::Entry::Vacant(vac) => {
-                    vac.insert(SweepLineSeg::Single(x));
-                }
-            }
-        }
-
-        let entries: Vec<_> = entries
-            .into_iter()
-            .map(|(idx, x)| SweepLineEntry { idx, x })
-            .collect();
-
-        let mut sweep_line = SweepLine {
-            y: new_line.y.clone(),
-            segs: entries,
-        };
-        sweep_line.segs.sort();
-        ret.push(sweep_line);
-    }
-
-    ret
-}
-
-/// Converts a sequence of weakly-ordered sweep lines into a sequence
-/// of actual sweep lines, while trying not to add in too many subdivisions.
-pub fn weaks_to_sweeps_sparse<F: Float>(
-    weaks: &[WeakSweepLinePair<F>],
-    segments: &Segments<F>,
-    eps: &F,
-) -> Vec<SweepLine<F>> {
-    // The first sweep-line just has a single entry for everything
-    let first_line = SweepLine {
-        y: weaks[0].new_line.y.clone(),
-        segs: weaks[0]
-            .new_line
-            .ordered_xs(segments, eps)
-            .map(|(idx, x)| SweepLineEntry {
-                idx,
-                x: SweepLineSeg::Single(x),
-            })
-            .collect(),
-    };
-
-    let mut ret = vec![first_line];
-
-    for WeakSweepLinePair { old_line, new_line } in &weaks[1..] {
-        let segs: Vec<_> = new_line.segs_needing_positions.iter().cloned().collect();
-        let mut processed_segs = HashSet::new();
-
-        let mut entries = HashMap::new();
-        for &seg in &segs {
-            if processed_segs.contains(&seg) {
-                continue;
-            }
-            if let Some(range) = old_line.influence_range(seg, segments, eps) {
-                entries.extend(
-                    old_line
-                        .ordered_partial_xs(range.clone(), segments, eps)
-                        .map(|(idx, x)| (idx, SweepLineSeg::Single(x))),
-                );
-                processed_segs.extend(old_line.segs[range].iter().cloned());
-            }
-        }
-
-        let mut processed_segs = HashSet::new();
-        for &seg in &segs {
-            if processed_segs.contains(&seg) {
-                continue;
-            }
-
-            let Some(range) = new_line.influence_range(seg, segments, eps) else {
-                continue;
-            };
-            for (idx, x) in new_line.ordered_partial_xs(range.clone(), segments, eps) {
-                match entries.entry(idx) {
-                    std::collections::hash_map::Entry::Occupied(mut occ) => {
-                        let SweepLineSeg::Single(enter_x) = occ.get().clone() else {
-                            unreachable!()
-                        };
-                        if !new_line.exits.contains(&idx) && !new_line.entrances.contains(&idx) {
-                            *occ.get_mut() = SweepLineSeg::EnterExit(enter_x, x);
-                        }
-                    }
-                    std::collections::hash_map::Entry::Vacant(vac) => {
-                        vac.insert(SweepLineSeg::Single(x));
-                    }
-                }
-            }
-            processed_segs.extend(new_line.segs[range].iter().cloned());
-        }
-
-        let entries: Vec<_> = entries
-            .into_iter()
-            .map(|(idx, x)| SweepLineEntry { idx, x })
-            .collect();
-
-        let mut sweep_line = SweepLine {
-            y: new_line.y.clone(),
-            segs: entries,
-        };
-        sweep_line.segs.sort();
-        ret.push(sweep_line);
-    }
-
-    ret
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct HSeg<F: Float> {
     end: F,
@@ -1383,50 +1236,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn test_sweep_with_horizontals() {
-        let eps = NotNan::new(0.01).unwrap();
-        let h = |y: f64| -> [Point<NotNan<f64>>; 2] {
-            [
-                Point::new(
-                    NotNan::try_from(-10.0).unwrap(),
-                    NotNan::try_from(y).unwrap(),
-                ),
-                Point::new(
-                    NotNan::try_from(10.0).unwrap(),
-                    NotNan::try_from(y).unwrap(),
-                ),
-            ]
-        };
-
-        let segs = mk_segs(&[(0.0, 0.0), (1.0, 1.0), (-2.0, 2.0)]);
-
-        let mut segs1 = segs.clone();
-        segs1.add_points(h(-5.0), false);
-        let lines = sweep(&segs1, &eps);
-        let lines = &weaks_to_sweeps_dense(&lines, &segs1, &eps);
-        // TODO: maybe snapshot tests?
-        dbg!(&lines);
-        assert_eq!(lines.len(), 5);
-
-        let mut segs2 = segs.clone();
-        segs2.add_points(h(0.75), false);
-        let lines = sweep(&segs2, &eps);
-        let lines = &weaks_to_sweeps_dense(&lines, &segs2, &eps);
-        // TODO: maybe snapshot tests?
-        dbg!(&lines);
-        assert_eq!(lines.len(), 5);
-
-        let mut segs3 = segs.clone();
-        segs3.add_points(h(1.0), false);
-        segs3.add_points(h(2.0), false);
-        let lines = sweep(&segs3, &eps);
-        let lines = &weaks_to_sweeps_dense(&lines, &segs3, &eps);
-        // TODO: maybe snapshot tests?
-        dbg!(&lines);
-        assert_eq!(lines.len(), 5);
-    }
-
     fn p<F: Float>(x: f32, y: f32) -> Point<F> {
         Point::new(F::from_f32(x), F::from_f32(y))
     }
@@ -1451,7 +1260,7 @@ mod tests {
         }
         let eps = P::Float::from_f32(0.1);
         let weaks = sweep(&segs, &eps);
-        let _sweeps = weaks_to_sweeps_dense(&weaks, &segs, &eps);
+        weaks_to_events_sparse(&weaks, &segs, &eps, |_, _| {});
     }
 
     proptest! {
