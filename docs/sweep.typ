@@ -429,11 +429,11 @@ before inserting the new segment, and let's call the new segment $beta$. First, 
 there is a place to insert the new segment while preserving the ordering invariant.
 
 #lemma[
-Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$, and let $i$ the largest $j$ for which
-$alpha^j prec_(y,epsilon) beta)$. Then
+Suppose $(alpha^1, ..., alpha^m)$ is $epsilon$-ordered at $y$, and let $i$ be the largest $j$ for which
+$alpha^j prec_(y,epsilon) beta$. Then
 $(alpha^1, ..., alpha^i, beta, alpha^(i+1), ..., alpha^m)$ is $epsilon$-ordered at $y$.
 (Here, we can allow the corner cases $i = 0$ and $i = m$ by declaring that
-"$alpha^0$" is a vertical line at $-infinity$ and "$alpha^(m+1)$" is a vertical line at $infinity$).
+"$alpha^0$" is a vertical line at $x = -infinity$ and "$alpha^(m+1)$" is a vertical line at $x = infinity$).
 ]<lem-insert-preserving-order>
 
 #proof[
@@ -445,7 +445,7 @@ Since $alpha^i prec_(y,epsilon) beta$, @lem-basic-order-properties implies that 
 
 #inexact[
 @lem-insert-preserving-order guarantees the existence of an insertion point, but it doesn't say how to
-find it efficiently (or indeed whether it can be found at all with inexact arithmetic).
+find it efficiently.
 But consider a predicate $f(alpha^j)$ that returns true whenever $alpha^j prec_(y,epsilon) beta$, and
 false whenever $alpha^j_+(y) > beta_+(y)$. Running a binary search with this predicate will find some $i$
 for which $f(alpha^i)$ is true and $f(alpha^(i+1))$ is false. By scanning to the right from there, we can
@@ -520,7 +520,7 @@ way to be correct is to treat the various swappings as a bunch of deletions from
 a bunch of insertions into the sweep-line. We have already shown that running an intersection scan
 after each insertion and deletion correctly maintains the crossing invariant, so we can just do that.
 
-= Full correctness
+= Correctness of the output
 
 We've described how to turn a bunch of segments into a continuum of sweep-lines, but we probably actually wanted
 to find the segments' intersection points. Let's define exactly what that means and how to get there.
