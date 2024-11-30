@@ -1,8 +1,6 @@
 //! A sweep-line implementation using weak orderings.
 //!
 //! This algorithm is documented in `docs/sweep.typ`.
-//!
-//! TODO: I think in this algorithm it makes sense to put Exit events first.
 
 // TODO:
 // - better heuristic for horizontal positions, that avoids small horizontal lines at simple intersections
@@ -21,9 +19,7 @@ use malachite::Rational;
 use crate::{
     geom::Segment,
     num::{Bounds, Float},
-    sweep::{
-        SegIdx, Segments, SweepEvent, SweepEventKind, SweepLine, SweepLineEntry, SweepLineSeg,
-    },
+    sweep::{SegIdx, Segments, SweepEvent, SweepEventKind},
 };
 
 #[derive(Clone, Debug)]
@@ -563,42 +559,6 @@ impl<F: Float> WeakSweepLine<F> {
         self.segs.iter().position(|&x| x == seg)
     }
 
-    // If this segment is in our line, find the subrange of our line that could possibly
-    // influence `seg`'s position.
-    fn influence_range(
-        &self,
-        seg: SegIdx,
-        segments: &Segments<F>,
-        eps: &F,
-    ) -> Option<Range<usize>> {
-        let idx = self.position(seg)?;
-        let mut start_idx = idx;
-        let mut seg_min = segments.get(seg).lower_bound(&self.y, eps).lower;
-
-        for i in (0..idx).rev() {
-            let prev_seg = segments.get(self.segs[i]);
-            if prev_seg.upper_bound(&self.y, eps).upper < seg_min {
-                break;
-            } else {
-                seg_min = prev_seg.lower_bound(&self.y, eps).lower;
-                start_idx = i;
-            }
-        }
-
-        let mut end_idx = idx + 1;
-        let mut seg_max = segments.get(seg).upper_bound(&self.y, eps).upper;
-        for i in (idx + 1)..self.segs.len() {
-            let next_seg = segments.get(self.segs[i]);
-            if next_seg.lower_bound(&self.y, eps).lower > seg_max {
-                break;
-            } else {
-                seg_max = next_seg.upper_bound(&self.y, eps).upper;
-                end_idx = i + 1;
-            }
-        }
-        Some(start_idx..end_idx)
-    }
-
     fn mark_endpoint(&mut self, idx: SegIdx, pos: usize, enter: bool, segments: &Segments<F>) {
         let x = if enter {
             &segments.get(idx).start.x
@@ -617,32 +577,6 @@ impl<F: Float> WeakSweepLine<F> {
             }
             self.segs_needing_positions.insert(seg_idx);
         }
-    }
-
-    /// Return all the segments in this sweep-line, along with a valid x position.
-    ///
-    /// TODO: this returns the smallest possible valid x position, which is correct but leads
-    /// to weird output, with unnecessary horizontal segments. We can probably find a heuristic
-    /// to improve this. (Like maybe also calculating the largest possible valid x position,
-    /// and then choosing something in between.)
-    fn ordered_xs<'a>(
-        &'a self,
-        segments: &'a Segments<F>,
-        eps: &'a F,
-    ) -> impl Iterator<Item = (SegIdx, F)> + 'a {
-        let mut max_so_far = self
-            .segs
-            .first()
-            .map(|seg| segments.get(*seg).lower(&self.y, eps))
-            // If `self.segs` is empty our y doesn't matter; we're going to return
-            // an empty iterator.
-            .unwrap_or(F::from_f32(0.0));
-
-        self.segs.iter().map(move |seg_idx| {
-            let x = segments.get(*seg_idx).lower(&self.y, eps);
-            max_so_far = max_so_far.clone().max(x);
-            (*seg_idx, max_so_far.clone())
-        })
     }
 
     /// Return a slice of segments in this sweep-line, along with a valid x position.
