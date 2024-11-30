@@ -3,7 +3,6 @@
 //! This algorithm is documented in `docs/sweep.typ`.
 
 // TODO:
-// - better heuristic for horizontal positions, that avoids small horizontal lines at simple intersections
 // - investigate better insertion heuristics: if there are a bunch of insertions at the same point, we
 //   currently put them in some arbitrary order and then later have to process a bunch of intersections
 
@@ -579,31 +578,44 @@ impl<F: Float> WeakSweepLine<F> {
         }
     }
 
-    /// Return a slice of segments in this sweep-line, along with a valid x position.
-    ///
-    /// TODO: this returns the smallest possible valid x position, which is correct but leads
-    /// to weird output, with unnecessary horizontal segments. We can probably find a heuristic
-    /// to improve this. (Like maybe also calculating the largest possible valid x position,
-    /// and then choosing something in between.)
-    fn ordered_partial_xs<'a>(
+    /// Returns an iterator of the allowable x positions for a slice of segments.
+    fn horizontal_positions<'a>(
         &'a self,
         range: Range<usize>,
         segments: &'a Segments<F>,
         eps: &'a F,
-    ) -> impl Iterator<Item = (SegIdx, F)> + 'a {
+    ) -> Vec<(SegIdx, F, F)> {
         let segs = &self.segs[range];
         let mut max_so_far = segs
             .first()
             .map(|seg| segments.get(*seg).lower(&self.y, eps))
             // If `self.segs` is empty our y doesn't matter; we're going to return
-            // an empty iterator.
+            // an empty vec.
             .unwrap_or(F::from_f32(0.0));
 
-        segs.iter().map(move |seg_idx| {
-            let x = segments.get(*seg_idx).lower(&self.y, eps);
-            max_so_far = max_so_far.clone().max(x);
-            (*seg_idx, max_so_far.clone())
-        })
+        let mut ret: Vec<_> = segs
+            .iter()
+            .map(move |seg_idx| {
+                let x = segments.get(*seg_idx).lower(&self.y, eps);
+                max_so_far = max_so_far.clone().max(x);
+                // Fill out the minimum allowed positions, with a placeholder for the maximum.
+                (*seg_idx, max_so_far.clone(), F::from_f32(0.0))
+            })
+            .collect();
+
+        let mut min_so_far = segs
+            .last()
+            .map(|seg| segments.get(*seg).upper(&self.y, eps))
+            // If `self.segs` is empty our y doesn't matter; we're going to return
+            // an empty vec.
+            .unwrap_or(F::from_f32(0.0));
+        for (seg_idx, _, max_allowed) in ret.iter_mut().rev() {
+            let x = segments.get(*seg_idx).upper(&self.y, eps);
+            min_so_far = min_so_far.clone().min(x);
+            *max_allowed = min_so_far.clone();
+        }
+
+        ret
     }
 }
 
@@ -684,22 +696,69 @@ impl<F: Float> WeakSweepLinePair<F> {
         let old_xs = self
             .old_line
             // TODO: decide whether to use (usize, usize) or std::ops::Range or something else
-            .ordered_partial_xs(range.0..range.1, segments, eps);
+            .horizontal_positions(range.0..range.1, segments, eps);
         let new_xs = self
             .new_line
-            .ordered_partial_xs(range.0..range.1, segments, eps);
+            .horizontal_positions(range.0..range.1, segments, eps);
 
+        dbg!(&old_xs, &new_xs);
         // The two positioning arrays should have the same segments, but possibly in a different
         // order. Group them by segment id.
         let mut seg_positions: HashMap<SegIdx, (F, Option<F>)> = HashMap::new();
-        for (idx, x) in old_xs {
+        let mut max_so_far = old_xs
+            .first()
+            .map_or(F::from_f32(0.0), |(_idx, min_x, _max_x)| {
+                min_x.clone() - F::from_f32(1.0)
+            });
+        for (idx, min_x, max_x) in old_xs {
+            let preferred_x = if self.new_line.exits.contains(&idx) {
+                // The best possible position is the true segment-ending position.
+                // (This could change if we want to be more sophisticated at joining contours.)
+                segments.get(idx).end.x.clone()
+            } else if self.new_line.entrances.contains(&idx) {
+                // The best possible position is the true segment-ending position.
+                // (This could change if we want to be more sophisticated at joining contours.)
+                segments.get(idx).start.x.clone()
+            } else if max_so_far >= min_x {
+                // The second best possible position is snapping to the neighbor that we
+                // just positioned.
+                max_so_far.clone()
+            } else {
+                segments.get(idx).at_y(&self.new_line.y)
+            };
+            let x = dbg!(preferred_x)
+                .max(min_x.clone())
+                .max(max_so_far.clone())
+                .min(max_x.clone());
+            dbg!(&x);
+            max_so_far = x.clone();
             seg_positions.insert(idx, (x, None));
         }
-        for (idx, x) in new_xs {
-            seg_positions
+
+        let mut max_so_far = new_xs
+            .first()
+            .map_or(F::from_f32(0.0), |(_idx, min_x, _max_x)| {
+                min_x.clone() - F::from_f32(1.0)
+            });
+        for (idx, min_x, max_x) in new_xs {
+            let pos = seg_positions
                 .get_mut(&idx)
-                .expect("the two ranges should have the same segments")
-                .1 = Some(x);
+                .expect("the two ranges should have the same segments");
+            let preferred_x = if min_x <= pos.0 && pos.0 <= max_x {
+                // Try snapping to the previous position if possible.
+                pos.0.clone()
+            } else if max_so_far >= min_x {
+                // Try snapping to the neighbor we just positioned.
+                max_so_far.clone()
+            } else {
+                segments.get(idx).at_y(&self.new_line.y)
+            };
+            let x = preferred_x
+                .max(min_x.clone())
+                .max(max_so_far.clone())
+                .min(max_x.clone());
+            max_so_far = x.clone();
+            pos.1 = Some(x);
         }
 
         let mut positions: Vec<Position<F>> = Vec::new();
