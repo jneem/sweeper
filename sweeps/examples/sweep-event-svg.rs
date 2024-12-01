@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
@@ -179,14 +179,47 @@ pub fn main() -> anyhow::Result<()> {
             max_y - min_y + 2.0 * pad,
         ),
     );
-    for seg_idx in segments.indices() {
+
+    let mut visited = HashSet::new();
+    for mut seg_idx in segments.indices() {
+        if !visited.insert(seg_idx) {
+            continue;
+        }
+
+        let mut data = svg::node::element::path::Data::new();
+        let start_idx = seg_idx;
         let seg = segments.get(seg_idx);
-        let data = svg::node::element::path::Data::new()
-            .move_to((seg.start.x.into_inner(), seg.start.y.into_inner()))
-            .line_to((seg.end.x.into_inner(), seg.end.y.into_inner()));
+        let p = if segments.orientation[seg_idx.0] {
+            &seg.start
+        } else {
+            &seg.end
+        };
+        data = data.move_to((p.x.into_inner(), p.y.into_inner()));
+
+        while let Some(idx) = segments.contour_next[seg_idx.0] {
+            seg_idx = idx;
+            visited.insert(seg_idx);
+            if seg_idx == start_idx {
+                data = data.close();
+                break;
+            } else {
+                let seg = segments.get(seg_idx);
+                let p = if segments.orientation[seg_idx.0] {
+                    &seg.start
+                } else {
+                    &seg.end
+                };
+                data = data.line_to((p.x.into_inner(), p.y.into_inner()));
+            }
+        }
+
         let path = svg::node::element::Path::new()
             .set("stroke", "black")
-            .set("stroke-width", stroke_width)
+            .set("stroke-width", 2.0 * eps.into_inner())
+            .set("stroke-linecap", "round")
+            .set("stroke-linejoin", "round")
+            .set("opacity", 0.2)
+            .set("fill", "none")
             .set("d", data);
         document = document.add(path);
     }
