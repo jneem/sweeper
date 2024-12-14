@@ -84,7 +84,7 @@ impl<F: Float> EventQueue<F> {
 
     pub fn next_is_stage_1(&self, y: &F) -> bool {
         self.next_y() == Some(y)
-            && self.next_kind().map_or(false, |kind| match kind {
+            && self.next_kind().is_some_and(|kind| match kind {
                 SweepEventKind::Enter(_) | SweepEventKind::Horizontal(_) => true,
                 SweepEventKind::Intersection { .. } | SweepEventKind::Exit(_) => false,
             })
@@ -92,7 +92,7 @@ impl<F: Float> EventQueue<F> {
 
     pub fn next_is_stage_2(&self, y: &F) -> bool {
         self.next_y() == Some(y)
-            && self.next_kind().map_or(false, |kind| match kind {
+            && self.next_kind().is_some_and(|kind| match kind {
                 SweepEventKind::Enter(_)
                 | SweepEventKind::Horizontal(_)
                 | SweepEventKind::Exit(_) => false,
@@ -370,7 +370,7 @@ impl<F: Float> State<F> {
                         let is_between = |idx: SegIdx| -> bool {
                             self.line
                                 .position(idx)
-                                .map_or(false, |pos| i <= pos && pos <= j)
+                                .is_some_and(|pos| i <= pos && pos <= j)
                         };
                         let has_witness = self.events.inner.iter().any(|ev| {
                             let is_between = match &ev.0.kind {
@@ -617,6 +617,14 @@ impl<F: Float> WeakSweepLine<F> {
 
         ret
     }
+
+    fn range_order(&self, range: (usize, usize)) -> HashMap<SegIdx, usize> {
+        self.segs[range.0..range.1]
+            .iter()
+            .enumerate()
+            .map(|(idx, seg)| (*seg, idx))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -685,8 +693,16 @@ impl<F: Float> WeakSweepLinePair<F> {
         merge_adjacent(ret)
     }
 
-    // idea: rather than connecting segments to their contour neighbors directly, connect
-    // the positioned endpoint to the actual endpoint. TODO: write this more clearly
+    pub fn range_orders(
+        &self,
+        range: (usize, usize),
+    ) -> (HashMap<SegIdx, usize>, HashMap<SegIdx, usize>) {
+        (
+            self.old_line.range_order(range),
+            self.new_line.range_order(range),
+        )
+    }
+
     fn position_range(
         &self,
         range: (usize, usize),
@@ -701,7 +717,6 @@ impl<F: Float> WeakSweepLinePair<F> {
             .new_line
             .horizontal_positions(range.0..range.1, segments, eps);
 
-        dbg!(&old_xs, &new_xs);
         // The two positioning arrays should have the same segments, but possibly in a different
         // order. Group them by segment id.
         let mut seg_positions: HashMap<SegIdx, (F, Option<F>)> = HashMap::new();
@@ -726,11 +741,10 @@ impl<F: Float> WeakSweepLinePair<F> {
             } else {
                 segments.get(idx).at_y(&self.new_line.y)
             };
-            let x = dbg!(preferred_x)
+            let x = preferred_x
                 .max(min_x.clone())
                 .max(max_so_far.clone())
                 .min(max_x.clone());
-            dbg!(&x);
             max_so_far = x.clone();
             seg_positions.insert(idx, (x, None));
         }
@@ -775,21 +789,21 @@ impl<F: Float> WeakSweepLinePair<F> {
                     // A horizontal segment. We can ignore the inferred position, and
                     // go with the original bounds.
                     debug_assert!(seg.is_horizontal());
-                    PositionKind::from_points(seg.start.x.clone(), seg.end.x.clone())
+                    PositionKind::from_points(seg.start.x.clone(), false, seg.end.x.clone(), false)
                 }
                 (true, false) => {
                     // The segment enters at this sweep-line. The actual entrance position
                     // will be the segment's true start position, and then we will move
                     // to the adjusted position before leaving this sweep-line.
-                    PositionKind::from_points(seg.start.x.clone(), x1)
+                    PositionKind::from_points(seg.start.x.clone(), false, x1, true)
                 }
                 (false, true) => {
                     // The segment terminates at this sweep-line. The actual final position
                     // will be the segment's true end position, but the segment will enter
                     // the sweep-line at the adjusted position.
-                    PositionKind::from_points(x0, seg.end.x.clone())
+                    PositionKind::from_points(x0, true, seg.end.x.clone(), false)
                 }
-                (false, false) => PositionKind::from_points(x0, x1),
+                (false, false) => PositionKind::from_points(x0, true, x1, true),
             };
 
             positions.push(Position { kind, seg_idx: idx });
@@ -895,44 +909,135 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct HSeg<F: Float> {
-    end: F,
-    enter_first: bool,
-    seg: SegIdx,
+pub struct HSeg<F: Float> {
+    pub end: F,
+    pub connected_at_start: bool,
+    pub connected_at_end: bool,
+    pub enter_first: bool,
+    pub seg: SegIdx,
+    pub start: F,
+}
+
+impl<F: Float> HSeg<F> {
+    pub fn from_position(pos: Position<F>) -> Option<Self> {
+        let PositionKind::Horizontal {
+            x0,
+            connected_above,
+            x1,
+            connected_below,
+        } = pos.kind
+        else {
+            return None;
+        };
+
+        let enter_first = x0 < x1;
+        let (start, end, connected_at_start, connected_at_end) = if enter_first {
+            (x0, x1, connected_above, connected_below)
+        } else {
+            (x1, x0, connected_below, connected_above)
+        };
+        Some(HSeg {
+            end,
+            start,
+            enter_first,
+            seg: pos.seg_idx,
+            connected_at_start,
+            connected_at_end,
+        })
+    }
+    pub fn connected_above_at(&self, x: &F) -> bool {
+        (*x == self.start && self.enter_first && self.connected_at_start)
+            || (*x == self.end && !self.enter_first && self.connected_at_end)
+    }
+
+    pub fn connected_below_at(&self, x: &F) -> bool {
+        (*x == self.start && !self.enter_first && self.connected_at_start)
+            || (*x == self.end && self.enter_first && self.connected_at_end)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PositionKind<F: Float> {
-    Point(F),
+    Point {
+        x: F,
+        connected_above: bool,
+        connected_below: bool,
+    },
     /// The two points are in sweep-line order.
     ///
     /// This doesn't necessarily mean that the first point (call it `x0`) is
     /// smaller than the second (`x1`)! Instead, it means that when traversing
     /// the segment in sweep-line order (i.e. in increasing `y`, and increasing
     /// `x` if the segment is horizontal) then it visits `x0` before `x1`.
-    Horizontal(F, F),
+    Horizontal {
+        x0: F,
+        connected_above: bool,
+        x1: F,
+        connected_below: bool,
+    },
 }
 
 impl<F: Float> PositionKind<F> {
     pub fn smaller_x(&self) -> &F {
         match self {
-            Self::Point(x) => x,
-            Self::Horizontal(x, y) => x.min(y),
+            Self::Point { x, .. } => x,
+            Self::Horizontal { x0, x1, .. } => x0.min(x1),
         }
     }
 
     pub fn larger_x(&self) -> &F {
         match self {
-            Self::Point(x) => x,
-            Self::Horizontal(x, y) => x.max(y),
+            Self::Point { x, .. } => x,
+            Self::Horizontal { x0, x1, .. } => x0.max(x1),
         }
     }
 
-    pub fn from_points(x0: F, x1: F) -> Self {
+    pub fn from_points(x0: F, connected_above: bool, x1: F, connected_below: bool) -> Self {
         if x0 == x1 {
-            PositionKind::Point(x0)
+            PositionKind::Point {
+                x: x0,
+                connected_above,
+                connected_below,
+            }
         } else {
-            PositionKind::Horizontal(x0, x1)
+            // Honestly, is it worth having the two variants? Maybe just have one and
+            // allow the points to be equal...
+            PositionKind::Horizontal {
+                x0,
+                x1,
+                connected_above,
+                connected_below,
+            }
+        }
+    }
+
+    pub fn connected_above_at(&self, x: &F) -> bool {
+        match self {
+            PositionKind::Point {
+                x: x0,
+                connected_above,
+                ..
+            }
+            | PositionKind::Horizontal {
+                x0,
+                connected_above,
+                ..
+            } => x == x0 && *connected_above,
+        }
+    }
+
+    pub fn connected_below_at(&self, x: &F) -> bool {
+        match self {
+            PositionKind::Point {
+                x: x1,
+                connected_below,
+                ..
+            }
+            | PositionKind::Horizontal {
+                x1,
+                connected_below,
+                ..
+            } => x == x1 && *connected_below,
         }
     }
 }
@@ -960,8 +1065,8 @@ pub struct Position<F: Float> {
 #[derive(Clone, Debug)]
 pub struct PositionIter<F: Float> {
     last_x: Option<F>,
-    positions: std::vec::IntoIter<Position<F>>,
-    active_horizontals: BTreeSet<HSeg<F>>,
+    pub positions: std::vec::IntoIter<Position<F>>,
+    pub active_horizontals: BTreeSet<HSeg<F>>,
 }
 
 impl<F: Float> PositionIter<F> {
@@ -977,6 +1082,16 @@ impl<F: Float> PositionIter<F> {
         }
     }
 
+    pub fn positions_at_current_x(&self) -> Option<impl Iterator<Item = &Position<F>>> {
+        let x = self.next_x()?;
+        Some(
+            self.positions
+                .as_slice()
+                .iter()
+                .take_while(move |p| p.kind.smaller_x() == &x),
+        )
+    }
+
     // TODO: instead of collecting the output events, we could return something referencing self
     // that allows iteration
     pub fn next_events(&mut self) -> Option<Vec<Position<F>>> {
@@ -986,15 +1101,21 @@ impl<F: Float> PositionIter<F> {
         for h in &self.active_horizontals {
             // unwrap: on the first event of this sweep line, active_horizontals is empty. So
             // we only get here after last_x is populated.
-            let mut x0 = self.last_x.clone().unwrap();
-            let mut x1 = next_x.clone().min(h.end.clone());
-            if !h.enter_first {
-                std::mem::swap(&mut x0, &mut x1);
+            let x0 = self.last_x.clone().unwrap();
+            let x1 = next_x.clone().min(h.end.clone());
+            let connected_end = x1 == h.end && h.connected_at_end;
+            let connected_start = x0 == h.start && h.connected_at_start;
+            if h.enter_first {
+                ret.push(Position {
+                    seg_idx: h.seg,
+                    kind: PositionKind::from_points(x0, connected_start, x1, connected_end),
+                });
+            } else {
+                ret.push(Position {
+                    seg_idx: h.seg,
+                    kind: PositionKind::from_points(x1, connected_end, x0, connected_start),
+                });
             }
-            ret.push(Position {
-                seg_idx: h.seg,
-                kind: PositionKind::Horizontal(x0, x1),
-            });
         }
 
         // Drain the active horizontals, throwing away horizontal segments that end before
@@ -1014,25 +1135,28 @@ impl<F: Float> PositionIter<F> {
             // unwrap: we just peeked at this element.
             let pos = self.positions.next().unwrap();
 
-            match pos.kind {
-                PositionKind::Point(x) => {
-                    ret.push(Position {
-                        seg_idx: pos.seg_idx,
-                        kind: PositionKind::Point(x),
-                    });
-                }
-                PositionKind::Horizontal(x0, x1) => {
-                    let enter_first = x0 < x1;
-                    self.active_horizontals.insert(HSeg {
-                        end: x0.max(x1),
-                        enter_first,
-                        seg: pos.seg_idx,
-                    });
-                }
+            if matches!(&pos.kind, PositionKind::Point { .. }) {
+                // We push output event for points immediately.
+                ret.push(pos);
+            } else if let Some(hseg) = HSeg::from_position(pos) {
+                // For horizontal segments, we don't output anything straight
+                // away. When we update the horizontal position and visit our
+                // horizontal segments, we'll output something.
+                self.active_horizontals.insert(hseg);
             }
         }
         self.last_x = Some(next_x);
         Some(ret)
+    }
+
+    pub fn drain_active_horizontals(&mut self, x: &F) {
+        while let Some(h) = self.active_horizontals.first() {
+            if h.end <= *x {
+                self.active_horizontals.pop_first();
+            } else {
+                break;
+            }
+        }
     }
 }
 

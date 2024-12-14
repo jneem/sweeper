@@ -103,10 +103,10 @@ impl SegmentCollector {
             self.advance_y(y);
         }
         match ev.kind {
-            PositionKind::Point(x) => {
+            PositionKind::Point { x, .. } => {
                 self.segs[seg_idx].push(Point::new(x, y));
             }
-            PositionKind::Horizontal(x0, x1) => {
+            PositionKind::Horizontal { x0, x1, .. } => {
                 let (segs, x0, x1) = if x0 < x1 {
                     (&mut self.segs[seg_idx], x0, x1)
                 } else {
