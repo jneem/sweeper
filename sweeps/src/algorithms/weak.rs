@@ -868,16 +868,19 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair
         events,
         segments: segments.clone(),
     };
+    #[cfg(debug_assertions)]
     state.check_invariants();
 
     let mut ret = Vec::new();
 
     while let Some(y) = state.events.next_y().cloned() {
         state.advance(y.clone());
+        #[cfg(debug_assertions)]
         state.check_invariants();
         // Process all the enter events at this y.
         while state.events.next_is_stage_1(&y) {
             state.step();
+            #[cfg(debug_assertions)]
             state.check_invariants();
         }
         let old_line = state.line.clone();
@@ -885,12 +888,14 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair
         // Process all the reorderings
         while state.events.next_is_stage_2(&y) {
             state.step();
+            #[cfg(debug_assertions)]
             state.check_invariants();
         }
 
         // Process all the exit events at this y.
         while state.events.next_is_at(&y) {
             state.step();
+            #[cfg(debug_assertions)]
             state.check_invariants();
         }
         state
@@ -902,6 +907,7 @@ pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair
             new_line: state.line.clone(),
         });
         state.process_exits();
+        #[cfg(debug_assertions)]
         state.check_invariants();
     }
 

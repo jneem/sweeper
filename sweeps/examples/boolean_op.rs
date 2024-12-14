@@ -1,7 +1,6 @@
 use std::{collections::HashSet, path::PathBuf, str::FromStr};
 
 use clap::Parser;
-use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
 use svg::Document;
 use sweeps::{geom::Point, sweep::Segments, topology::Topology};
@@ -56,7 +55,8 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
             match child {
                 usvg::Node::Group(group) => add_group(group, ret),
                 usvg::Node::Path(path) => {
-                    let kurbo_els = path.data().segments().map(|seg| match seg {
+                    let data = path.data().clone().transform(path.abs_transform()).unwrap();
+                    let kurbo_els = data.segments().map(|seg| match seg {
                         usvg::tiny_skia_path::PathSegment::MoveTo(p) => {
                             kurbo::PathEl::MoveTo(pt(p))
                         }
@@ -73,7 +73,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     });
 
                     let mut points = Vec::<Point<Float>>::new();
-                    kurbo::flatten(kurbo_els, DEFAULT_ACCURACY, |el| match el {
+                    kurbo::flatten(kurbo_els, 1e-3, |el| match el {
                         kurbo::PathEl::MoveTo(p) => {
                             ret.add_points(points.drain(..), false);
                             points
