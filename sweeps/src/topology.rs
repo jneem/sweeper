@@ -107,6 +107,7 @@ impl std::fmt::Debug for HalfOutputSegIdx {
     }
 }
 
+/// A vector indexed by half-output segments.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct HalfOutputSegVec<T> {
     pub start: Vec<T>,
@@ -212,7 +213,12 @@ pub struct Topology<F: Float> {
     pub winding: OutputSegVec<HalfSegmentWindingNumbers>,
     pub point: HalfOutputSegVec<Point<F>>,
     pub point_neighbors: HalfOutputSegVec<PointNeighbors>,
-    pub deleted: Vec<bool>,
+    /// Marks the output segments that have been deleted due to merges of coindident segments.
+    pub deleted: OutputSegVec<bool>,
+    /// The map from a segment to its scan-left neighbor is always strictly decreasing (in the
+    /// index). This ensures that a scan will always terminate, and it also means that we can
+    /// build the contours in increasing `OutputSegIdx` order.
+    pub scan_left: OutputSegVec<Option<OutputSegIdx>>,
 }
 
 impl<F: Float> Topology<F> {
@@ -302,7 +308,8 @@ impl<F: Float> Topology<F> {
         self.point_neighbors.start.push(no_nbrs);
         self.point_neighbors.end.push(no_nbrs);
         self.winding.inner.push(winding);
-        self.deleted.push(false);
+        self.deleted.inner.push(false);
+        self.scan_left.inner.push(None);
         out_idx
     }
 
@@ -313,7 +320,8 @@ impl<F: Float> Topology<F> {
             winding: OutputSegVec::default(),
             point: HalfOutputSegVec::default(),
             point_neighbors: HalfOutputSegVec::default(),
-            deleted: Vec::new(),
+            deleted: OutputSegVec::default(),
+            scan_left: OutputSegVec::default(),
         };
 
         // Mark the first contour as shape a.
@@ -334,14 +342,14 @@ impl<F: Float> Topology<F> {
         for line in weaks {
             for (start, end) in line.changed_intervals(segments, eps) {
                 let positions = line.position_range((start, end), segments, eps);
-                let winding = if start == 0 {
-                    WindingNumber::default()
+                let scan_left_seg = if start == 0 {
+                    None
                 } else {
                     let prev_seg = line.old_line.segs[start - 1];
-                    let last_output = ret.open_segs[prev_seg.0].front().expect("no open seg");
-                    ret.winding[*last_output].counter_clockwise
+                    debug_assert!(!ret.open_segs[prev_seg.0].is_empty());
+                    ret.open_segs[prev_seg.0].front().copied()
                 };
-                ret.update_from_positions(positions, segments, line, (start, end), winding);
+                ret.update_from_positions(positions, segments, line, (start, end), scan_left_seg);
             }
         }
         ret.merge_coincident();
@@ -354,10 +362,12 @@ impl<F: Float> Topology<F> {
         segments: &Segments<F>,
         lines: &WeakSweepLinePair<F>,
         range: (usize, usize),
-        init: WindingNumber,
+        mut scan_left: Option<OutputSegIdx>,
     ) {
         let y = &lines.new_line.y;
-        let mut winding = init;
+        let mut winding = scan_left
+            .map(|idx| self.winding[idx].counter_clockwise)
+            .unwrap_or_default();
         let (old_order, new_order) = lines.range_orders(range);
         while let Some(next_x) = pos.next_x() {
             let p = Point::new(next_x.clone(), y.clone());
@@ -432,7 +442,10 @@ impl<F: Float> Topology<F> {
                     clockwise: prev_winding,
                     counter_clockwise: winding,
                 };
-                new_out_segs.push(self.new_half_seg(new_seg, p.clone(), windings, false));
+                let half_seg = self.new_half_seg(new_seg, p.clone(), windings, false);
+                self.scan_left[half_seg] = scan_left;
+                scan_left = Some(half_seg);
+                new_out_segs.push(half_seg);
             }
             self.add_segs_counter_clockwise(
                 &mut first_seg,
@@ -484,7 +497,9 @@ impl<F: Float> Topology<F> {
                     counter_clockwise: w,
                     clockwise: prev_w,
                 };
-                new_out_segs.push(self.new_half_seg(new_seg, p.clone(), windings, true));
+                let half_seg = self.new_half_seg(new_seg, p.clone(), windings, true);
+                self.scan_left[half_seg] = scan_left;
+                new_out_segs.push(half_seg);
             }
             self.add_segs_counter_clockwise(
                 &mut first_seg,
@@ -502,7 +517,7 @@ impl<F: Float> Topology<F> {
     }
 
     fn delete(&mut self, seg: OutputSegIdx) {
-        self.deleted[seg.0] = true;
+        self.deleted[seg] = true;
         self.delete_half(seg.first_half());
         self.delete_half(seg.second_half());
     }
@@ -519,10 +534,10 @@ impl<F: Float> Topology<F> {
     /// their second endpoint.
     fn merge_coincident(&mut self) {
         for idx in 0..self.winding.inner.len() {
+            let idx = OutputSegIdx(idx);
             if self.deleted[idx] {
                 continue;
             }
-            let idx = OutputSegIdx(idx);
             let cc_nbr = self.point_neighbors[idx.first_half()].clockwise;
             if self.point[idx.second_half()] == self.point[cc_nbr.other_half()] {
                 // All output segments are in sweep line order, so if they're
@@ -540,8 +555,8 @@ impl<F: Float> Topology<F> {
 
     pub fn segment_indices(&self) -> impl Iterator<Item = OutputSegIdx> + '_ {
         (0..self.winding.inner.len())
-            .filter(|i| !self.deleted[*i])
             .map(OutputSegIdx)
+            .filter(|i| !self.deleted[*i])
     }
 
     pub fn winding(&self, idx: HalfOutputSegIdx) -> HalfSegmentWindingNumbers {
@@ -552,13 +567,15 @@ impl<F: Float> Topology<F> {
         }
     }
 
-    pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Vec<Vec<Point<F>>> {
+    pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Contours<F> {
+        let mut ret = Contours::default();
+        let mut seg_contour: Vec<Option<ContourIdx>> = vec![None; self.winding.inner.len()];
+
         let bdy = |idx: OutputSegIdx| -> bool {
             inside(self.winding[idx].clockwise) != inside(self.winding[idx].counter_clockwise)
         };
 
         let mut visited = vec![false; self.winding.inner.len()];
-        let mut contours = Vec::new();
         for idx in self.segment_indices() {
             if visited[idx.0] {
                 continue;
@@ -568,8 +585,38 @@ impl<F: Float> Topology<F> {
                 continue;
             }
 
-            // We have a boundary segment; let's traverse its contour.
-            let mut contour = Vec::new();
+            // We found a boundary segment. Let's start by scanning left to figure out where we
+            // are relative to existing contours.
+            let mut contour = Contour::default();
+            // TODO: consider changing terminology to "east"
+            let mut left_seg = self.scan_left[idx];
+            while let Some(left) = left_seg {
+                if self.deleted[left] || !bdy(left) {
+                    left_seg = self.scan_left[left];
+                } else {
+                    break;
+                }
+            }
+            if let Some(left) = left_seg {
+                if let Some(left_contour) = seg_contour[left.0] {
+                    // Is the thing just to our left inside or outside the output set?
+                    let outside = !inside(self.winding(left.first_half()).counter_clockwise);
+                    if outside == ret.contours[left_contour.0].outer {
+                        // They're an outer contour, and there's exterior between us and them,
+                        // or they're an inner contour and there's interior between us.
+                        // That means they're our sibling.
+                        contour.parent = ret.contours[left_contour.0].parent;
+                        contour.outer = outside;
+                        debug_assert!(outside || contour.parent.is_some());
+                    } else {
+                        contour.parent = Some(left_contour);
+                        contour.outer = !ret.contours[left_contour.0].outer;
+                    }
+                } else {
+                    panic!("I'm {idx:?}, left is {left:?}. Y u no have contour?");
+                }
+            };
+
             // First, arrange the orientation so that the interior is on our
             // left as we walk.
             let (start, mut next) = if inside(self.winding[idx].counter_clockwise) {
@@ -577,16 +624,19 @@ impl<F: Float> Topology<F> {
             } else {
                 (idx.second_half(), idx.first_half())
             };
-            contour.push(self.point[start].clone());
+            contour.points.push(self.point[start].clone());
+            let contour_idx = ContourIdx(ret.contours.len());
+            seg_contour[idx.0] = Some(contour_idx);
 
             debug_assert!(inside(self.winding(start).counter_clockwise));
             loop {
                 visited[next.idx.0] = true;
+                seg_contour[next.idx.0] = Some(contour_idx);
 
                 debug_assert!(inside(self.winding(next).clockwise));
                 debug_assert!(!inside(self.winding(next).counter_clockwise));
 
-                contour.push(self.point[next].clone());
+                contour.points.push(self.point[next].clone());
 
                 // Walk clockwise around the point until we find the next segment
                 // that's on the boundary.
@@ -601,11 +651,44 @@ impl<F: Float> Topology<F> {
                 }
                 next = nbr.other_half();
             }
-            contour.push(self.point[next].clone());
-            contours.push(contour);
+            contour.points.push(self.point[next].clone());
+            ret.contours.push(contour);
         }
 
-        contours
+        ret
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct ContourIdx(pub usize);
+
+#[derive(Clone, Debug)]
+pub struct Contour<F: Float> {
+    pub points: Vec<Point<F>>,
+    pub outer: bool,
+    pub parent: Option<ContourIdx>,
+}
+
+impl<F: Float> Default for Contour<F> {
+    fn default() -> Self {
+        Self {
+            points: Vec::default(),
+            outer: true,
+            parent: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Contours<F: Float> {
+    pub contours: Vec<Contour<F>>,
+}
+
+impl<F: Float> Default for Contours<F> {
+    fn default() -> Self {
+        Contours {
+            contours: Vec::default(),
+        }
     }
 }
 
@@ -668,5 +751,21 @@ mod tests {
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
         dbg!(top);
+    }
+
+    #[test]
+    fn nested_squares() {
+        let mut segs =
+            Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
+        segs.add_points(
+            [p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)],
+            true,
+        );
+        let eps = NotNan::try_from(0.01).unwrap();
+        let weaks = sweep(&segs, &eps);
+        let top = Topology::build(&weaks, &segs, &eps);
+        dbg!(&top);
+        let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
+        dbg!(contours);
     }
 }

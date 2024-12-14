@@ -268,9 +268,9 @@ fn add_op(
     ];
 
     let mut color_idx = 0;
-    for contour in contours {
+    for contour in contours.contours {
         let mut data = svg::node::element::path::Data::new();
-        let mut contour = contour.into_iter();
+        let mut contour = contour.points.into_iter();
         let Some(p) = contour.next() else {
             continue;
         };
