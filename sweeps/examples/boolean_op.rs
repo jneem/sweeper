@@ -129,6 +129,7 @@ pub fn main() -> anyhow::Result<()> {
     let min_y = ys.iter().min().unwrap().into_inner();
     let max_y = ys.iter().max().unwrap().into_inner();
     let pad = 1.0 + eps.into_inner();
+    let stroke_width = (max_y - min_y).max(max_x - max_y) / 512.0;
     let mut document = svg::Document::new().set(
         "viewBox",
         (
@@ -155,6 +156,12 @@ pub fn main() -> anyhow::Result<()> {
         }
     });
 
+    let colors = [
+        "#005F73", "#0A9396", "#94D2BD", "#E9D8A6", "#EE9B00", "#CA6702", "#BB3E03", "#AE2012",
+        "#9B2226",
+    ];
+
+    let mut color_idx = 0;
     for contour in contours {
         let mut data = svg::node::element::path::Data::new();
         let mut contour = contour.into_iter();
@@ -171,8 +178,13 @@ pub fn main() -> anyhow::Result<()> {
         data = data.close();
         let path = svg::node::element::Path::new()
             .set("d", data)
-            .set("fill", "black");
+            .set("stroke", "black")
+            .set("stroke-width", stroke_width)
+            .set("stroke-linecap", "round")
+            .set("stroke-linejoin", "round")
+            .set("fill", colors[color_idx]);
         document = document.add(path);
+        color_idx = (color_idx + 1) % colors.len();
     }
 
     svg::save(&args.output, &document)?;
