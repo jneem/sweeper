@@ -703,7 +703,7 @@ impl<F: Float> WeakSweepLinePair<F> {
         )
     }
 
-    fn position_range(
+    pub fn position_range(
         &self,
         range: (usize, usize),
         segments: &Segments<F>,

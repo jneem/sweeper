@@ -97,7 +97,6 @@ impl SegmentCollector {
     }
 
     fn handle(&mut self, y: Float, ev: Position<Float>) {
-        dbg!(y, &ev);
         let seg_idx = ev.seg_idx.0;
         if y > self.y {
             self.advance_y(y);
