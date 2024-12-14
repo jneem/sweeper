@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::{
     algorithms::weak::{HSeg, PositionIter, WeakSweepLinePair},
     geom::Point,
@@ -138,7 +140,25 @@ pub struct Topology<F: Float> {
     /// Indexed by `SegIdx`.
     pub shape_a: Vec<bool>,
     /// Indexed by `SegIdx`.
-    pub open_segs: Vec<Option<OutputSegIdx>>,
+    ///
+    /// For each input segment, this is the list of output segments that we've started
+    /// recording but haven't finished with. There can be up to three of them, because
+    /// consider a segment that passes through a sweep-line like this:
+    ///
+    /// ```text
+    ///           /
+    ///          /
+    /// (*) /---/
+    ///    /
+    ///   /
+    /// ```
+    ///
+    /// When we come to process the sweep-line at height (*), we'll already have the
+    /// unfinished output segment coming from above. But before dealing with it, we'll
+    /// first encounter the output segment pointing down and add an unfinished segment
+    /// for that. Then we'll add an output segment for the horizontal line and so
+    /// at that point there will be three unfinished output segments.
+    pub open_segs: Vec<VecDeque<OutputSegIdx>>,
     /// Indexed by `OutputSegIdx`
     pub winding: Vec<SegmentWindingNumbers>,
     pub point: OutputSegVec<Point<F>>,
@@ -201,7 +221,7 @@ impl<F: Float> Topology<F> {
     ) -> impl Iterator<Item = HalfOutputSegIdx> + 'a {
         segs.map(|s| {
             self.open_segs[s.0]
-                .take()
+                .pop_front()
                 .expect("should be open")
                 .second_half()
         })
@@ -212,9 +232,14 @@ impl<F: Float> Topology<F> {
         idx: SegIdx,
         p: Point<F>,
         winding: SegmentWindingNumbers,
+        horizontal: bool,
     ) -> OutputSegIdx {
         let out_idx = OutputSegIdx(self.winding.len());
-        self.open_segs[idx.0] = Some(out_idx);
+        if horizontal {
+            self.open_segs[idx.0].push_front(out_idx);
+        } else {
+            self.open_segs[idx.0].push_back(out_idx);
+        }
         self.point.start.push(p);
         self.point
             .end
@@ -235,7 +260,7 @@ impl<F: Float> Topology<F> {
     pub fn from_segments(segments: &Segments<F>) -> Self {
         let mut ret = Self {
             shape_a: vec![false; segments.segs.len()],
-            open_segs: vec![None; segments.segs.len()],
+            open_segs: vec![VecDeque::new(); segments.segs.len()],
             winding: Vec::new(),
             point: OutputSegVec::default(),
             point_neighbors: OutputSegVec::default(),
@@ -264,8 +289,8 @@ impl<F: Float> Topology<F> {
                     WindingNumber::default()
                 } else {
                     let prev_seg = line.old_line.segs[start - 1];
-                    let last_output = ret.open_segs[prev_seg.0].expect("no open seg");
-                    ret.winding[last_output.0].clockwise
+                    let last_output = ret.open_segs[prev_seg.0].front().expect("no open seg");
+                    ret.winding[last_output.0].counter_clockwise
                 };
                 ret.update_from_positions(positions, segments, line, (start, end), winding);
             }
@@ -358,7 +383,7 @@ impl<F: Float> Topology<F> {
                     clockwise: prev_winding,
                     counter_clockwise: winding,
                 };
-                new_out_segs.push(self.new_half_seg(new_seg, p.clone(), windings));
+                new_out_segs.push(self.new_half_seg(new_seg, p.clone(), windings, false));
             }
             self.add_segs_counter_clockwise(
                 &mut first_seg,
@@ -407,10 +432,10 @@ impl<F: Float> Topology<F> {
                     w.shape_b += winding_dir;
                 }
                 let windings = SegmentWindingNumbers {
-                    counter_clockwise: prev_w,
-                    clockwise: w,
+                    counter_clockwise: w,
+                    clockwise: prev_w,
                 };
-                new_out_segs.push(self.new_half_seg(new_seg, p.clone(), windings));
+                new_out_segs.push(self.new_half_seg(new_seg, p.clone(), windings, true));
             }
             self.add_segs_counter_clockwise(
                 &mut first_seg,
@@ -463,6 +488,12 @@ impl<F: Float> Topology<F> {
                 }
             }
         }
+    }
+
+    pub fn segment_indices(&self) -> impl Iterator<Item = OutputSegIdx> + '_ {
+        (0..self.winding.len())
+            .filter(|i| !self.deleted[*i])
+            .map(OutputSegIdx)
     }
 }
 
