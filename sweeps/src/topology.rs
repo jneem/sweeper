@@ -7,7 +7,7 @@ use crate::{
     sweep::{SegIdx, Segments},
 };
 
-/// We support boolean operations, so a "winding number" for is is two winding
+/// We support boolean operations, so a "winding number" for us is two winding
 /// numbers, one for each shape.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Default)]
 pub struct WindingNumber {
@@ -26,16 +26,26 @@ impl std::fmt::Debug for WindingNumber {
 /// For simple segments, the winding numbers on two sides only differ by one. Once
 /// we merge segments, they can differ by more.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Default)]
-pub struct SegmentWindingNumbers {
+pub struct HalfSegmentWindingNumbers {
+    /// This half-segment is incident to a point. Imagine you're standing at
+    /// that point, looking out along the segment. This is the winding number of
+    /// the area just counter-clockwise (to the left, from your point of view)
+    /// of the segment.
     pub counter_clockwise: WindingNumber,
+    /// This half-segment is incident to a point. Imagine you're standing at
+    /// that point, looking out along the segment. This is the winding number of
+    /// the area just clockwise (to the right, from your point of view) of the segment.
     pub clockwise: WindingNumber,
 }
 
-impl SegmentWindingNumbers {
+impl HalfSegmentWindingNumbers {
+    /// A half-segment's winding numbers are trivial if they're the same on both sides.
+    /// In this case, the segment is invisible to the topology of the sets.
     fn is_trivial(&self) -> bool {
         self.counter_clockwise == self.clockwise
     }
 
+    /// Returns the winding numbers of our opposite half-segment.
     fn flipped(self) -> Self {
         Self {
             counter_clockwise: self.clockwise,
@@ -44,12 +54,16 @@ impl SegmentWindingNumbers {
     }
 }
 
-impl std::fmt::Debug for SegmentWindingNumbers {
+impl std::fmt::Debug for HalfSegmentWindingNumbers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?} | {:?}", self.clockwise, self.counter_clockwise)
     }
 }
 
+/// An index into the set of output segments.
+///
+/// There's no compile-time magic preventing misuse of this index, but you
+/// should only use this to index into the [`Topology`] that you got it from.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct OutputSegIdx(pub usize);
 
@@ -94,12 +108,12 @@ impl std::fmt::Debug for HalfOutputSegIdx {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct OutputSegVec<T> {
+pub struct HalfOutputSegVec<T> {
     pub start: Vec<T>,
     pub end: Vec<T>,
 }
 
-impl<T> Default for OutputSegVec<T> {
+impl<T> Default for HalfOutputSegVec<T> {
     fn default() -> Self {
         Self {
             start: Vec::new(),
@@ -108,7 +122,7 @@ impl<T> Default for OutputSegVec<T> {
     }
 }
 
-impl<T> std::ops::Index<HalfOutputSegIdx> for OutputSegVec<T> {
+impl<T> std::ops::Index<HalfOutputSegIdx> for HalfOutputSegVec<T> {
     type Output = T;
 
     fn index(&self, index: HalfOutputSegIdx) -> &Self::Output {
@@ -120,13 +134,38 @@ impl<T> std::ops::Index<HalfOutputSegIdx> for OutputSegVec<T> {
     }
 }
 
-impl<T> std::ops::IndexMut<HalfOutputSegIdx> for OutputSegVec<T> {
+impl<T> std::ops::IndexMut<HalfOutputSegIdx> for HalfOutputSegVec<T> {
     fn index_mut(&mut self, index: HalfOutputSegIdx) -> &mut T {
         if index.first_half {
             &mut self.start[index.idx.0]
         } else {
             &mut self.end[index.idx.0]
         }
+    }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct OutputSegVec<T> {
+    inner: Vec<T>,
+}
+
+impl<T> Default for OutputSegVec<T> {
+    fn default() -> Self {
+        Self { inner: Vec::new() }
+    }
+}
+
+impl<T> std::ops::Index<OutputSegIdx> for OutputSegVec<T> {
+    type Output = T;
+
+    fn index(&self, index: OutputSegIdx) -> &Self::Output {
+        &self.inner[index.0]
+    }
+}
+
+impl<T> std::ops::IndexMut<OutputSegIdx> for OutputSegVec<T> {
+    fn index_mut(&mut self, index: OutputSegIdx) -> &mut T {
+        &mut self.inner[index.0]
     }
 }
 
@@ -166,10 +205,13 @@ pub struct Topology<F: Float> {
     /// for that. Then we'll add an output segment for the horizontal line and so
     /// at that point there will be three unfinished output segments.
     pub open_segs: Vec<VecDeque<OutputSegIdx>>,
-    /// Indexed by `OutputSegIdx`
-    pub winding: Vec<SegmentWindingNumbers>,
-    pub point: OutputSegVec<Point<F>>,
-    pub point_neighbors: OutputSegVec<PointNeighbors>,
+    /// This is sort of logically indexed by `HalfOutputSegIdx`, because we can look at the
+    /// `HalfSegmentWindingNumbers` for each `HalfOutputSegIdx`. But since the two halves of
+    /// the winding numbers are determined by one another, we only store the winding numbers
+    /// for the start half of the output segment.
+    pub winding: OutputSegVec<HalfSegmentWindingNumbers>,
+    pub point: HalfOutputSegVec<Point<F>>,
+    pub point_neighbors: HalfOutputSegVec<PointNeighbors>,
     pub deleted: Vec<bool>,
 }
 
@@ -238,10 +280,10 @@ impl<F: Float> Topology<F> {
         &mut self,
         idx: SegIdx,
         p: Point<F>,
-        winding: SegmentWindingNumbers,
+        winding: HalfSegmentWindingNumbers,
         horizontal: bool,
     ) -> OutputSegIdx {
-        let out_idx = OutputSegIdx(self.winding.len());
+        let out_idx = OutputSegIdx(self.winding.inner.len());
         if horizontal {
             self.open_segs[idx.0].push_front(out_idx);
         } else {
@@ -259,7 +301,7 @@ impl<F: Float> Topology<F> {
         };
         self.point_neighbors.start.push(no_nbrs);
         self.point_neighbors.end.push(no_nbrs);
-        self.winding.push(winding);
+        self.winding.inner.push(winding);
         self.deleted.push(false);
         out_idx
     }
@@ -268,9 +310,9 @@ impl<F: Float> Topology<F> {
         let mut ret = Self {
             shape_a: vec![false; segments.segs.len()],
             open_segs: vec![VecDeque::new(); segments.segs.len()],
-            winding: Vec::new(),
-            point: OutputSegVec::default(),
-            point_neighbors: OutputSegVec::default(),
+            winding: OutputSegVec::default(),
+            point: HalfOutputSegVec::default(),
+            point_neighbors: HalfOutputSegVec::default(),
             deleted: Vec::new(),
         };
 
@@ -297,7 +339,7 @@ impl<F: Float> Topology<F> {
                 } else {
                     let prev_seg = line.old_line.segs[start - 1];
                     let last_output = ret.open_segs[prev_seg.0].front().expect("no open seg");
-                    ret.winding[last_output.0].counter_clockwise
+                    ret.winding[*last_output].counter_clockwise
                 };
                 ret.update_from_positions(positions, segments, line, (start, end), winding);
             }
@@ -386,7 +428,7 @@ impl<F: Float> Topology<F> {
                 } else {
                     winding.shape_b += winding_dir;
                 }
-                let windings = SegmentWindingNumbers {
+                let windings = HalfSegmentWindingNumbers {
                     clockwise: prev_winding,
                     counter_clockwise: winding,
                 };
@@ -438,7 +480,7 @@ impl<F: Float> Topology<F> {
                 } else {
                     w.shape_b += winding_dir;
                 }
-                let windings = SegmentWindingNumbers {
+                let windings = HalfSegmentWindingNumbers {
                     counter_clockwise: w,
                     clockwise: prev_w,
                 };
@@ -476,7 +518,7 @@ impl<F: Float> Topology<F> {
     /// we don't know whether two segments are coincident until we've processed
     /// their second endpoint.
     fn merge_coincident(&mut self) {
-        for idx in 0..self.winding.len() {
+        for idx in 0..self.winding.inner.len() {
             if self.deleted[idx] {
                 continue;
             }
@@ -487,10 +529,9 @@ impl<F: Float> Topology<F> {
                 // coincident then they'd better both be first halves.
                 debug_assert!(cc_nbr.first_half);
                 self.delete(idx);
-                self.winding[cc_nbr.idx.0].counter_clockwise =
-                    self.winding[idx.0].counter_clockwise;
+                self.winding[cc_nbr.idx].counter_clockwise = self.winding[idx].counter_clockwise;
 
-                if self.winding[cc_nbr.idx.0].is_trivial() {
+                if self.winding[cc_nbr.idx].is_trivial() {
                     self.delete(cc_nbr.idx);
                 }
             }
@@ -498,25 +539,25 @@ impl<F: Float> Topology<F> {
     }
 
     pub fn segment_indices(&self) -> impl Iterator<Item = OutputSegIdx> + '_ {
-        (0..self.winding.len())
+        (0..self.winding.inner.len())
             .filter(|i| !self.deleted[*i])
             .map(OutputSegIdx)
     }
 
-    pub fn winding(&self, idx: HalfOutputSegIdx) -> SegmentWindingNumbers {
+    pub fn winding(&self, idx: HalfOutputSegIdx) -> HalfSegmentWindingNumbers {
         if idx.first_half {
-            self.winding[idx.idx.0]
+            self.winding[idx.idx]
         } else {
-            self.winding[idx.idx.0].flipped()
+            self.winding[idx.idx].flipped()
         }
     }
 
     pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Vec<Vec<Point<F>>> {
         let bdy = |idx: OutputSegIdx| -> bool {
-            inside(self.winding[idx.0].clockwise) != inside(self.winding[idx.0].counter_clockwise)
+            inside(self.winding[idx].clockwise) != inside(self.winding[idx].counter_clockwise)
         };
 
-        let mut visited = vec![false; self.winding.len()];
+        let mut visited = vec![false; self.winding.inner.len()];
         let mut contours = Vec::new();
         for idx in self.segment_indices() {
             if visited[idx.0] {
@@ -531,7 +572,7 @@ impl<F: Float> Topology<F> {
             let mut contour = Vec::new();
             // First, arrange the orientation so that the interior is on our
             // left as we walk.
-            let (start, mut next) = if inside(self.winding[idx.0].counter_clockwise) {
+            let (start, mut next) = if inside(self.winding[idx].counter_clockwise) {
                 (idx.first_half(), idx.second_half())
             } else {
                 (idx.second_half(), idx.first_half())
@@ -539,11 +580,9 @@ impl<F: Float> Topology<F> {
             contour.push(self.point[start].clone());
 
             debug_assert!(inside(self.winding(start).counter_clockwise));
-            dbg!(start, &self.point[start]);
             loop {
                 visited[next.idx.0] = true;
 
-                dbg!(next, &self.point[next]);
                 debug_assert!(inside(self.winding(next).clockwise));
                 debug_assert!(!inside(self.winding(next).counter_clockwise));
 
@@ -552,7 +591,6 @@ impl<F: Float> Topology<F> {
                 // Walk clockwise around the point until we find the next segment
                 // that's on the boundary.
                 let mut nbr = self.point_neighbors[next].clockwise;
-                //dbg!(self.winding(next), self.winding(nbr));
                 debug_assert!(inside(self.winding(nbr).counter_clockwise));
                 while inside(self.winding(nbr).clockwise) {
                     nbr = self.point_neighbors[nbr].clockwise;

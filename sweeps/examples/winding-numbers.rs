@@ -1,15 +1,9 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
-use svg::Node as _;
-use sweeps::{
-    algorithms::weak::{Position, PositionKind},
-    geom::Point,
-    sweep::Segments,
-    topology::Topology,
-};
+use sweeps::{geom::Point, sweep::Segments, topology::Topology};
 
 type Float = NotNan<f64>;
 
@@ -82,61 +76,6 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
 
     add_group(tree.root(), &mut ret);
     ret
-}
-
-struct SegmentCollector {
-    segs: Vec<Vec<Point<Float>>>,
-    backwards: Vec<Vec<Point<Float>>>,
-    y: Float,
-}
-
-impl SegmentCollector {
-    fn advance_y(&mut self, y: Float) {
-        for (seg, back) in self.segs.iter_mut().zip(&mut self.backwards) {
-            seg.extend(std::mem::take(back).into_iter().rev());
-        }
-        self.y = y;
-    }
-
-    fn handle(&mut self, y: Float, ev: Position<Float>) {
-        let seg_idx = ev.seg_idx.0;
-        if y > self.y {
-            self.advance_y(y);
-        }
-        match ev.kind {
-            PositionKind::Point { x, .. } => {
-                self.segs[seg_idx].push(Point::new(x, y));
-            }
-            PositionKind::Horizontal { x0, x1, .. } => {
-                let (segs, x0, x1) = if x0 < x1 {
-                    (&mut self.segs[seg_idx], x0, x1)
-                } else {
-                    (&mut self.backwards[seg_idx], x1, x0)
-                };
-                if segs.is_empty() {
-                    segs.push(Point::new(x0, y));
-                }
-                segs.push(Point::new(x1, y));
-            }
-        };
-    }
-
-    fn new(size: usize) -> Self {
-        Self {
-            segs: vec![Vec::new(); size],
-            backwards: vec![Vec::new(); size],
-            y: f64::NEG_INFINITY.try_into().unwrap(),
-        }
-    }
-
-    fn finish(mut self, segs: &Segments<Float>) -> Vec<Vec<Point<Float>>> {
-        for (i, seg) in self.segs.iter_mut().enumerate() {
-            if !segs.orientation[i] {
-                seg.reverse();
-            }
-        }
-        self.segs
-    }
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -217,14 +156,14 @@ pub fn main() -> anyhow::Result<()> {
         let ny = ny / norm * 3.0 * dot_radius;
 
         let text =
-            svg::node::element::Text::new(format!("{:?}", top.winding[seg.0].counter_clockwise))
+            svg::node::element::Text::new(format!("{:?}", top.winding[seg].counter_clockwise))
                 .set("font-size", text_size)
                 .set("text-anchor", "start")
                 .set("x", (x0 + x1) / 2.0 + nx)
                 .set("y", (y0 + y1) / 2.0 + ny);
         document = document.add(text);
 
-        let text = svg::node::element::Text::new(format!("{:?}", top.winding[seg.0].clockwise))
+        let text = svg::node::element::Text::new(format!("{:?}", top.winding[seg].clockwise))
             .set("font-size", text_size)
             .set("text-anchor", "end")
             .set("x", (x0 + x1) / 2.0 - nx)
