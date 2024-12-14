@@ -1,8 +1,9 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{collections::HashSet, path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
+use svg::Document;
 use sweeps::{geom::Point, sweep::Segments, topology::Topology};
 
 type Float = NotNan<f64>;
@@ -12,6 +13,8 @@ enum Op {
     Union,
     Intersection,
     Xor,
+    Difference,
+    ReverseDifference,
 }
 
 impl FromStr for Op {
@@ -22,6 +25,8 @@ impl FromStr for Op {
             "union" => Ok(Op::Union),
             "intersection" => Ok(Op::Intersection),
             "xor" => Ok(Op::Xor),
+            "difference" => Ok(Op::Difference),
+            "reverse_difference" => Ok(Op::ReverseDifference),
             _ => Err(format!("unknown op {s}")),
         }
     }
@@ -31,9 +36,6 @@ impl FromStr for Op {
 struct Args {
     input: PathBuf,
     output: PathBuf,
-
-    #[arg(long)]
-    op: Op,
 
     #[arg(long)]
     non_zero: bool,
@@ -129,30 +131,134 @@ pub fn main() -> anyhow::Result<()> {
     let min_y = ys.iter().min().unwrap().into_inner();
     let max_y = ys.iter().max().unwrap().into_inner();
     let pad = 1.0 + eps.into_inner();
+    let one_width = max_x - min_x + 2.0 * pad;
+    let one_height = max_y - min_y + 2.0 * pad;
     let stroke_width = (max_y - min_y).max(max_x - max_y) / 512.0;
     let mut document = svg::Document::new().set(
         "viewBox",
-        (
-            min_x - pad,
-            min_y - pad,
-            max_x - min_x + 2.0 * pad,
-            max_y - min_y + 2.0 * pad,
-        ),
+        (min_x - pad, min_y - pad, one_width * 3.0, one_height * 2.0),
     );
 
+    // Draw the original document.
+    let mut visited = HashSet::new();
+    for mut seg_idx in segments.indices() {
+        if !visited.insert(seg_idx) {
+            continue;
+        }
+
+        let mut data = svg::node::element::path::Data::new();
+        let start_idx = seg_idx;
+        let seg = segments.get(seg_idx);
+        let p = if segments.orientation[seg_idx.0] {
+            &seg.start
+        } else {
+            &seg.end
+        };
+        data = data.move_to((p.x.into_inner(), p.y.into_inner()));
+
+        while let Some(idx) = segments.contour_next[seg_idx.0] {
+            seg_idx = idx;
+            visited.insert(seg_idx);
+            if seg_idx == start_idx {
+                data = data.close();
+                break;
+            } else {
+                let seg = segments.get(seg_idx);
+                let p = if segments.orientation[seg_idx.0] {
+                    &seg.start
+                } else {
+                    &seg.end
+                };
+                data = data.line_to((p.x.into_inner(), p.y.into_inner()));
+            }
+        }
+
+        let path = svg::node::element::Path::new()
+            .set("stroke", "black")
+            .set("stroke-width", 2.0 * eps.into_inner())
+            .set("stroke-linecap", "round")
+            .set("stroke-linejoin", "round")
+            .set("opacity", 0.2)
+            .set("fill", "none")
+            .set("d", data);
+        document = document.add(path);
+    }
+
+    document = add_op(
+        document,
+        Op::Union,
+        args.non_zero,
+        &top,
+        one_width,
+        0.0,
+        stroke_width,
+    );
+    document = add_op(
+        document,
+        Op::Intersection,
+        args.non_zero,
+        &top,
+        one_width * 2.0,
+        0.0,
+        stroke_width,
+    );
+    document = add_op(
+        document,
+        Op::Xor,
+        args.non_zero,
+        &top,
+        0.0,
+        one_height,
+        stroke_width,
+    );
+    document = add_op(
+        document,
+        Op::Difference,
+        args.non_zero,
+        &top,
+        one_width,
+        one_height,
+        stroke_width,
+    );
+    document = add_op(
+        document,
+        Op::ReverseDifference,
+        args.non_zero,
+        &top,
+        one_width * 2.0,
+        one_height,
+        stroke_width,
+    );
+
+    svg::save(&args.output, &document)?;
+
+    Ok(())
+}
+
+fn add_op(
+    mut doc: Document,
+    op: Op,
+    non_zero: bool,
+    top: &Topology<Float>,
+    x_off: f64,
+    y_off: f64,
+    stroke_width: f64,
+) -> Document {
     let contours = top.contours(|w| {
         let inside = |winding| {
-            if args.non_zero {
+            if non_zero {
                 winding != 0
             } else {
                 winding % 2 != 0
             }
         };
 
-        match args.op {
+        match op {
             Op::Union => inside(w.shape_a) || inside(w.shape_b),
             Op::Intersection => inside(w.shape_a) && inside(w.shape_b),
             Op::Xor => inside(w.shape_a) != inside(w.shape_b),
+            Op::Difference => inside(w.shape_a) && !inside(w.shape_b),
+            Op::ReverseDifference => inside(w.shape_b) && !inside(w.shape_a),
         }
     });
 
@@ -170,10 +276,10 @@ pub fn main() -> anyhow::Result<()> {
         };
 
         let (x, y) = (p.x.into_inner(), p.y.into_inner());
-        data = data.move_to((x, y));
+        data = data.move_to((x + x_off, y + y_off));
         for p in contour {
             let (x, y) = (p.x.into_inner(), p.y.into_inner());
-            data = data.line_to((x, y));
+            data = data.line_to((x + x_off, y + y_off));
         }
         data = data.close();
         let path = svg::node::element::Path::new()
@@ -183,11 +289,8 @@ pub fn main() -> anyhow::Result<()> {
             .set("stroke-linecap", "round")
             .set("stroke-linejoin", "round")
             .set("fill", colors[color_idx]);
-        document = document.add(path);
+        doc = doc.add(path);
         color_idx = (color_idx + 1) % colors.len();
     }
-
-    svg::save(&args.output, &document)?;
-
-    Ok(())
+    doc
 }
