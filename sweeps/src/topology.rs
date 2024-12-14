@@ -35,6 +35,13 @@ impl SegmentWindingNumbers {
     fn is_trivial(&self) -> bool {
         self.counter_clockwise == self.clockwise
     }
+
+    fn flipped(self) -> Self {
+        Self {
+            counter_clockwise: self.clockwise,
+            clockwise: self.counter_clockwise,
+        }
+    }
 }
 
 impl std::fmt::Debug for SegmentWindingNumbers {
@@ -299,7 +306,7 @@ impl<F: Float> Topology<F> {
         ret
     }
 
-    pub fn update_from_positions(
+    fn update_from_positions(
         &mut self,
         mut pos: PositionIter<F>,
         segments: &Segments<F>,
@@ -468,7 +475,7 @@ impl<F: Float> Topology<F> {
     /// makes it a little bit tricky is that (except for horizontal segments)
     /// we don't know whether two segments are coincident until we've processed
     /// their second endpoint.
-    pub fn merge_coincident(&mut self) {
+    fn merge_coincident(&mut self) {
         for idx in 0..self.winding.len() {
             if self.deleted[idx] {
                 continue;
@@ -494,6 +501,73 @@ impl<F: Float> Topology<F> {
         (0..self.winding.len())
             .filter(|i| !self.deleted[*i])
             .map(OutputSegIdx)
+    }
+
+    pub fn winding(&self, idx: HalfOutputSegIdx) -> SegmentWindingNumbers {
+        if idx.first_half {
+            self.winding[idx.idx.0]
+        } else {
+            self.winding[idx.idx.0].flipped()
+        }
+    }
+
+    pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Vec<Vec<Point<F>>> {
+        let bdy = |idx: OutputSegIdx| -> bool {
+            inside(self.winding[idx.0].clockwise) != inside(self.winding[idx.0].counter_clockwise)
+        };
+
+        let mut visited = vec![false; self.winding.len()];
+        let mut contours = Vec::new();
+        for idx in self.segment_indices() {
+            if visited[idx.0] {
+                continue;
+            }
+
+            if !bdy(idx) {
+                continue;
+            }
+
+            // We have a boundary segment; let's traverse its contour.
+            let mut contour = Vec::new();
+            // First, arrange the orientation so that the interior is on our
+            // left as we walk.
+            let (start, mut next) = if inside(self.winding[idx.0].counter_clockwise) {
+                (idx.first_half(), idx.second_half())
+            } else {
+                (idx.second_half(), idx.first_half())
+            };
+            contour.push(self.point[start].clone());
+
+            debug_assert!(inside(self.winding(start).counter_clockwise));
+            dbg!(start, &self.point[start]);
+            loop {
+                visited[next.idx.0] = true;
+
+                dbg!(next, &self.point[next]);
+                debug_assert!(inside(self.winding(next).clockwise));
+                debug_assert!(!inside(self.winding(next).counter_clockwise));
+
+                contour.push(self.point[next].clone());
+
+                // Walk clockwise around the point until we find the next segment
+                // that's on the boundary.
+                let mut nbr = self.point_neighbors[next].clockwise;
+                //dbg!(self.winding(next), self.winding(nbr));
+                debug_assert!(inside(self.winding(nbr).counter_clockwise));
+                while inside(self.winding(nbr).clockwise) {
+                    nbr = self.point_neighbors[nbr].clockwise;
+                }
+
+                if nbr == start {
+                    break;
+                }
+                next = nbr.other_half();
+            }
+            contour.push(self.point[next].clone());
+            contours.push(contour);
+        }
+
+        contours
     }
 }
 
