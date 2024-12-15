@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::{
     algorithms::weak::{HSeg, PositionIter, WeakSweepLinePair},
@@ -218,7 +218,7 @@ pub struct Topology<F: Float> {
     /// The map from a segment to its scan-left neighbor is always strictly decreasing (in the
     /// index). This ensures that a scan will always terminate, and it also means that we can
     /// build the contours in increasing `OutputSegIdx` order.
-    pub scan_left: OutputSegVec<Option<OutputSegIdx>>,
+    pub scan_east: OutputSegVec<Option<OutputSegIdx>>,
 }
 
 impl<F: Float> Topology<F> {
@@ -309,7 +309,7 @@ impl<F: Float> Topology<F> {
         self.point_neighbors.end.push(no_nbrs);
         self.winding.inner.push(winding);
         self.deleted.inner.push(false);
-        self.scan_left.inner.push(None);
+        self.scan_east.inner.push(None);
         out_idx
     }
 
@@ -321,7 +321,7 @@ impl<F: Float> Topology<F> {
             point: HalfOutputSegVec::default(),
             point_neighbors: HalfOutputSegVec::default(),
             deleted: OutputSegVec::default(),
-            scan_left: OutputSegVec::default(),
+            scan_east: OutputSegVec::default(),
         };
 
         // Mark the first contour as shape a.
@@ -443,7 +443,7 @@ impl<F: Float> Topology<F> {
                     counter_clockwise: winding,
                 };
                 let half_seg = self.new_half_seg(new_seg, p.clone(), windings, false);
-                self.scan_left[half_seg] = scan_left;
+                self.scan_east[half_seg] = scan_left;
                 scan_left = Some(half_seg);
                 new_out_segs.push(half_seg);
             }
@@ -498,7 +498,7 @@ impl<F: Float> Topology<F> {
                     clockwise: prev_w,
                 };
                 let half_seg = self.new_half_seg(new_seg, p.clone(), windings, true);
-                self.scan_left[half_seg] = scan_left;
+                self.scan_east[half_seg] = scan_left;
                 new_out_segs.push(half_seg);
             }
             self.add_segs_counter_clockwise(
@@ -567,8 +567,9 @@ impl<F: Float> Topology<F> {
         }
     }
 
-    // TODO: we don't currently guarantee simple contours, but I think we should. In particular,
-    // for a path like
+    // We walk contours in sweep-line order of their smallest point. This mostly ensures
+    // that we visit outer contours before we visit their children. However, when the inner
+    // and outer contours share a point, we run into a problem. For example:
     //
     // /------------------\
     // |        /\        |
@@ -577,9 +578,13 @@ impl<F: Float> Topology<F> {
     //  \       \/      /
     //   \             /
     //    -------------
-    // (where the top-middle point is supposed to have 4 segments coming out of it) we
-    // currently just generate one contour but I think we chould generate an outer one
-    // and an inner one that share the top-middle point.
+    // (where the top-middle point is supposed to have 4 segments coming out of it; it's
+    // a hard to draw it in ASCII). In this case, we'll "notice" the inner contour when
+    // we realize that we've visited a point twice. At that point, we extract the inner part
+    // into a separate contour and mark it as a child of the outer one. This requires some
+    // slightly sketch indexing, because we need to refer to the outer contour even though
+    // we haven't finished generating it. We solve this by reserving a slot for the unfinished
+    // outer contour as soon as we start walking it.
     pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Contours<F> {
         let mut ret = Contours::default();
         let mut seg_contour: Vec<Option<ContourIdx>> = vec![None; self.winding.inner.len()];
@@ -598,37 +603,44 @@ impl<F: Float> Topology<F> {
                 continue;
             }
 
+            // Keep track of the points that were visited on this walk, so that if we re-visit a
+            // point we can split out an additional contour. This might be more efficient if we
+            // index our points instead of storing them physically.
+            let mut last_visit: HashMap<Point<F>, usize> = HashMap::new();
+
             // We found a boundary segment. Let's start by scanning left to figure out where we
             // are relative to existing contours.
+            let contour_idx = ContourIdx(ret.contours.len());
             let mut contour = Contour::default();
-            // TODO: consider changing terminology to "east"
-            let mut left_seg = self.scan_left[idx];
-            while let Some(left) = left_seg {
+            let mut east_seg = self.scan_east[idx];
+            while let Some(left) = east_seg {
                 if self.deleted[left] || !bdy(left) {
-                    left_seg = self.scan_left[left];
+                    east_seg = self.scan_east[left];
                 } else {
                     break;
                 }
             }
-            if let Some(left) = left_seg {
-                if let Some(left_contour) = seg_contour[left.0] {
+            if let Some(east) = east_seg {
+                if let Some(east_contour) = seg_contour[east.0] {
                     // Is the thing just to our left inside or outside the output set?
-                    let outside = !inside(self.winding(left.first_half()).counter_clockwise);
-                    if outside == ret.contours[left_contour.0].outer {
+                    let outside = !inside(self.winding(east.first_half()).counter_clockwise);
+                    if outside == ret.contours[east_contour.0].outer {
                         // They're an outer contour, and there's exterior between us and them,
                         // or they're an inner contour and there's interior between us.
                         // That means they're our sibling.
-                        contour.parent = ret.contours[left_contour.0].parent;
+                        contour.parent = ret.contours[east_contour.0].parent;
                         contour.outer = outside;
                         debug_assert!(outside || contour.parent.is_some());
                     } else {
-                        contour.parent = Some(left_contour);
-                        contour.outer = !ret.contours[left_contour.0].outer;
+                        contour.parent = Some(east_contour);
+                        contour.outer = !ret.contours[east_contour.0].outer;
                     }
                 } else {
-                    panic!("I'm {idx:?}, left is {left:?}. Y u no have contour?");
+                    panic!("I'm {idx:?}, east is {east:?}. Y u no have contour?");
                 }
             };
+            // Reserve a space for the unfinished outer contour, as described above.
+            ret.contours.push(contour);
 
             // First, arrange the orientation so that the interior is on our
             // left as we walk.
@@ -637,19 +649,17 @@ impl<F: Float> Topology<F> {
             } else {
                 (idx.second_half(), idx.first_half())
             };
-            contour.points.push(self.point[start].clone());
-            let contour_idx = ContourIdx(ret.contours.len());
-            seg_contour[idx.0] = Some(contour_idx);
+            let mut segs = Vec::new();
+            last_visit.insert(self.point[start].clone(), 0);
 
             debug_assert!(inside(self.winding(start).counter_clockwise));
             loop {
                 visited[next.idx.0] = true;
-                seg_contour[next.idx.0] = Some(contour_idx);
 
                 debug_assert!(inside(self.winding(next).clockwise));
                 debug_assert!(!inside(self.winding(next).counter_clockwise));
 
-                contour.points.push(self.point[next].clone());
+                segs.push(next);
 
                 // Walk clockwise around the point until we find the next segment
                 // that's on the boundary.
@@ -662,10 +672,46 @@ impl<F: Float> Topology<F> {
                 if nbr == start {
                     break;
                 }
+
+                let p = self.point[nbr].clone();
+                if let Some(seg_idx) = last_visit.get(&p) {
+                    // We repeated a point, meaning that we've found an inner contour. Extract
+                    // it and remove it from the current contour.
+
+                    // seg_idx should point to the end of a segment whose start is at p.
+                    debug_assert_eq!(self.point[segs[*seg_idx].other_half()], p);
+
+                    let loop_contour_idx = ContourIdx(ret.contours.len());
+                    for &seg in &segs[*seg_idx..] {
+                        seg_contour[seg.idx.0] = Some(loop_contour_idx);
+                    }
+                    let mut points = Vec::with_capacity(segs.len() - seg_idx + 1);
+                    points.push(p);
+                    points.extend(segs[*seg_idx..].iter().map(|s| self.point[*s].clone()));
+                    ret.contours.push(Contour {
+                        points,
+                        parent: Some(contour_idx),
+                        outer: !ret.contours[contour_idx.0].outer,
+                    });
+                    segs.truncate(*seg_idx);
+                    // In principle, we should also be unsetting `last_visit`
+                    // for all points in the contour we just removed. I *think*
+                    // we don't need to, because it's impossible for the outer
+                    // contour to visit any of them anyway. Should check this
+                    // more carefully.
+                } else {
+                    last_visit.insert(p, segs.len());
+                }
+
                 next = nbr.other_half();
             }
-            contour.points.push(self.point[next].clone());
-            ret.contours.push(contour);
+            let mut points = Vec::with_capacity(segs.len() + 1);
+            points.push(self.point[start].clone());
+            points.extend(segs.iter().map(|s| self.point[*s].clone()));
+            for &seg in &segs {
+                seg_contour[seg.idx.0] = Some(contour_idx);
+            }
+            ret.contours[contour_idx.0].points = points;
         }
 
         ret
@@ -818,6 +864,21 @@ mod tests {
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
+
+        insta::assert_ron_snapshot!((top, contours));
+    }
+
+    #[test]
+    fn inner_loop() {
+        let mut segs =
+            Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
+        segs.add_points([p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)], true);
+        segs.add_points([p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)], true);
+        let eps = NotNan::try_from(0.01).unwrap();
+        let weaks = sweep(&segs, &eps);
+        let top = Topology::build(&weaks, &segs, &eps);
+        let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
+
         insta::assert_ron_snapshot!((top, contours));
     }
 }

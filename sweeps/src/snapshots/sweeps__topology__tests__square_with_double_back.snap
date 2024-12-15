@@ -314,7 +314,7 @@ Topology(
       false,
     ],
   ),
-  scan_left: OutputSegVec(
+  scan_east: OutputSegVec(
     inner: [
       None,
       Some(OutputSegIdx(0)),
