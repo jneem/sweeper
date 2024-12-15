@@ -175,7 +175,7 @@ pub fn main() -> anyhow::Result<()> {
 
         let path = svg::node::element::Path::new()
             .set("stroke", "black")
-            .set("stroke-width", 2.0 * eps.into_inner())
+            .set("stroke-width", stroke_width)
             .set("stroke-linecap", "round")
             .set("stroke-linejoin", "round")
             .set("opacity", 0.2)
@@ -268,20 +268,23 @@ fn add_op(
     ];
 
     let mut color_idx = 0;
-    for contour in contours.contours {
+    for group in contours.grouped() {
         let mut data = svg::node::element::path::Data::new();
-        let mut contour = contour.points.into_iter();
-        let Some(p) = contour.next() else {
-            continue;
-        };
 
-        let (x, y) = (p.x.into_inner(), p.y.into_inner());
-        data = data.move_to((x + x_off, y + y_off));
-        for p in contour {
+        for contour_idx in group {
+            let mut contour = contours[contour_idx].points.iter().cloned();
+            let Some(p) = contour.next() else {
+                continue;
+            };
+
             let (x, y) = (p.x.into_inner(), p.y.into_inner());
-            data = data.line_to((x + x_off, y + y_off));
+            data = data.move_to((x + x_off, y + y_off));
+            for p in contour {
+                let (x, y) = (p.x.into_inner(), p.y.into_inner());
+                data = data.line_to((x + x_off, y + y_off));
+            }
+            data = data.close();
         }
-        data = data.close();
         let path = svg::node::element::Path::new()
             .set("d", data)
             .set("stroke", "black")

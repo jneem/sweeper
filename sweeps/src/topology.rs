@@ -567,6 +567,19 @@ impl<F: Float> Topology<F> {
         }
     }
 
+    // TODO: we don't currently guarantee simple contours, but I think we should. In particular,
+    // for a path like
+    //
+    // /------------------\
+    // |        /\        |
+    // |       /  \       |
+    // \       \  /      /
+    //  \       \/      /
+    //   \             /
+    //    -------------
+    // (where the top-middle point is supposed to have 4 segments coming out of it) we
+    // currently just generate one contour but I think we chould generate an outer one
+    // and an inner one that share the top-middle point.
     pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Contours<F> {
         let mut ret = Contours::default();
         let mut seg_contour: Vec<Option<ContourIdx>> = vec![None; self.winding.inner.len()];
@@ -682,6 +695,43 @@ impl<F: Float> Default for Contour<F> {
 #[derive(Clone, Debug)]
 pub struct Contours<F: Float> {
     pub contours: Vec<Contour<F>>,
+}
+
+impl<F: Float> Contours<F> {
+    pub fn grouped(&self) -> Vec<Vec<ContourIdx>> {
+        let mut children = vec![Vec::new(); self.contours.len()];
+        let mut top_level = Vec::new();
+        for i in 0..self.contours.len() {
+            if let Some(parent) = self.contours[i].parent {
+                children[parent.0].push(ContourIdx(i));
+            } else {
+                top_level.push(ContourIdx(i));
+            }
+        }
+
+        let mut ret = Vec::with_capacity(top_level.len());
+        for top in top_level {
+            let mut tree = Vec::new();
+            fn visit(idx: ContourIdx, children: &[Vec<ContourIdx>], acc: &mut Vec<ContourIdx>) {
+                acc.push(idx);
+                for &child in &children[idx.0] {
+                    visit(child, children, acc);
+                }
+            }
+            visit(top, &children, &mut tree);
+            ret.push(tree);
+        }
+
+        ret
+    }
+}
+
+impl<F: Float> std::ops::Index<ContourIdx> for Contours<F> {
+    type Output = Contour<F>;
+
+    fn index(&self, index: ContourIdx) -> &Self::Output {
+        &self.contours[index.0]
+    }
 }
 
 impl<F: Float> Default for Contours<F> {
