@@ -4,7 +4,7 @@ use ordered_float::NotNan;
 use crate::num::{Bounds, Float};
 
 // Points are sorted by `y` and then by `x`
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Point<F: Float> {
     pub y: F,
     pub x: F,

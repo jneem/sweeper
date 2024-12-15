@@ -1,0 +1,202 @@
+---
+source: sweeps/src/topology.rs
+expression: top
+---
+Topology(
+  shape_a: [
+    true,
+    true,
+    true,
+    true,
+  ],
+  open_segs: [
+    [],
+    [],
+    [],
+    [],
+  ],
+  winding: OutputSegVec(
+    inner: [
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+      ),
+    ],
+  ),
+  point: HalfOutputSegVec(
+    start: [
+      Point(
+        y: 0.0,
+        x: 0.0,
+      ),
+      Point(
+        y: 0.0,
+        x: 0.0,
+      ),
+      Point(
+        y: 0.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 1.0,
+        x: 0.0,
+      ),
+    ],
+    end: [
+      Point(
+        y: 1.0,
+        x: 0.0,
+      ),
+      Point(
+        y: 0.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 1.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 1.0,
+        x: 1.0,
+      ),
+    ],
+  ),
+  point_neighbors: HalfOutputSegVec(
+    start: [
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: false,
+        ),
+      ),
+    ],
+    end: [
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: false,
+        ),
+      ),
+    ],
+  ),
+  deleted: OutputSegVec(
+    inner: [
+      false,
+      false,
+      false,
+      false,
+    ],
+  ),
+  scan_left: OutputSegVec(
+    inner: [
+      None,
+      Some(OutputSegIdx(0)),
+      Some(OutputSegIdx(0)),
+      None,
+    ],
+  ),
+)

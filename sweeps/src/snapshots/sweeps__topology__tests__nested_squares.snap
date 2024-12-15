@@ -1,0 +1,433 @@
+---
+source: sweeps/src/topology.rs
+expression: "(top, contours)"
+---
+(Topology(
+  shape_a: [
+    true,
+    true,
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+  ],
+  open_segs: [
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+  ],
+  winding: OutputSegVec(
+    inner: [
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: -1,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: -1,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: -1,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: -1,
+        ),
+        clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+      ),
+      HalfSegmentWindingNumbers(
+        counter_clockwise: WindingNumber(
+          shape_a: -1,
+          shape_b: 0,
+        ),
+        clockwise: WindingNumber(
+          shape_a: 0,
+          shape_b: 0,
+        ),
+      ),
+    ],
+  ),
+  point: HalfOutputSegVec(
+    start: [
+      Point(
+        y: -2.0,
+        x: -2.0,
+      ),
+      Point(
+        y: -2.0,
+        x: -2.0,
+      ),
+      Point(
+        y: -2.0,
+        x: 2.0,
+      ),
+      Point(
+        y: -1.0,
+        x: -1.0,
+      ),
+      Point(
+        y: -1.0,
+        x: -1.0,
+      ),
+      Point(
+        y: -1.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 1.0,
+        x: -1.0,
+      ),
+      Point(
+        y: 2.0,
+        x: -2.0,
+      ),
+    ],
+    end: [
+      Point(
+        y: 2.0,
+        x: -2.0,
+      ),
+      Point(
+        y: -2.0,
+        x: 2.0,
+      ),
+      Point(
+        y: 2.0,
+        x: 2.0,
+      ),
+      Point(
+        y: 1.0,
+        x: -1.0,
+      ),
+      Point(
+        y: -1.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 1.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 1.0,
+        x: 1.0,
+      ),
+      Point(
+        y: 2.0,
+        x: 2.0,
+      ),
+    ],
+  ),
+  point_neighbors: HalfOutputSegVec(
+    start: [
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(1),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(4),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(3),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(0),
+          first_half: false,
+        ),
+      ),
+    ],
+    end: [
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(7),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(7),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(7),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(7),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(6),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(6),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(6),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(6),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: false,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: false,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(2),
+          first_half: false,
+        ),
+      ),
+    ],
+  ),
+  deleted: OutputSegVec(
+    inner: [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ],
+  ),
+  scan_left: OutputSegVec(
+    inner: [
+      None,
+      Some(OutputSegIdx(0)),
+      Some(OutputSegIdx(0)),
+      Some(OutputSegIdx(0)),
+      Some(OutputSegIdx(3)),
+      Some(OutputSegIdx(3)),
+      Some(OutputSegIdx(0)),
+      None,
+    ],
+  ),
+), Contours(
+  contours: [
+    Contour(
+      points: [
+        Point(
+          y: -2.0,
+          x: -2.0,
+        ),
+        Point(
+          y: 2.0,
+          x: -2.0,
+        ),
+        Point(
+          y: 2.0,
+          x: 2.0,
+        ),
+        Point(
+          y: -2.0,
+          x: 2.0,
+        ),
+        Point(
+          y: -2.0,
+          x: -2.0,
+        ),
+        Point(
+          y: -2.0,
+          x: -2.0,
+        ),
+      ],
+      outer: true,
+      parent: None,
+    ),
+    Contour(
+      points: [
+        Point(
+          y: 1.0,
+          x: -1.0,
+        ),
+        Point(
+          y: -1.0,
+          x: -1.0,
+        ),
+        Point(
+          y: -1.0,
+          x: 1.0,
+        ),
+        Point(
+          y: 1.0,
+          x: 1.0,
+        ),
+        Point(
+          y: 1.0,
+          x: -1.0,
+        ),
+        Point(
+          y: 1.0,
+          x: -1.0,
+        ),
+      ],
+      outer: false,
+      parent: Some(ContourIdx(0)),
+    ),
+  ],
+))

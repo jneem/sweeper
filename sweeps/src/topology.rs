@@ -9,7 +9,7 @@ use crate::{
 
 /// We support boolean operations, so a "winding number" for us is two winding
 /// numbers, one for each shape.
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Default, serde::Serialize)]
 pub struct WindingNumber {
     pub shape_a: i32,
     pub shape_b: i32,
@@ -25,7 +25,7 @@ impl std::fmt::Debug for WindingNumber {
 ///
 /// For simple segments, the winding numbers on two sides only differ by one. Once
 /// we merge segments, they can differ by more.
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Default, serde::Serialize)]
 pub struct HalfSegmentWindingNumbers {
     /// This half-segment is incident to a point. Imagine you're standing at
     /// that point, looking out along the segment. This is the winding number of
@@ -64,7 +64,7 @@ impl std::fmt::Debug for HalfSegmentWindingNumbers {
 ///
 /// There's no compile-time magic preventing misuse of this index, but you
 /// should only use this to index into the [`Topology`] that you got it from.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct OutputSegIdx(pub usize);
 
 impl OutputSegIdx {
@@ -82,7 +82,7 @@ impl OutputSegIdx {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct HalfOutputSegIdx {
     idx: OutputSegIdx,
     first_half: bool,
@@ -108,7 +108,7 @@ impl std::fmt::Debug for HalfOutputSegIdx {
 }
 
 /// A vector indexed by half-output segments.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct HalfOutputSegVec<T> {
     pub start: Vec<T>,
     pub end: Vec<T>,
@@ -145,7 +145,7 @@ impl<T> std::ops::IndexMut<HalfOutputSegIdx> for HalfOutputSegVec<T> {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct OutputSegVec<T> {
     inner: Vec<T>,
 }
@@ -170,7 +170,7 @@ impl<T> std::ops::IndexMut<OutputSegIdx> for OutputSegVec<T> {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct PointNeighbors {
     clockwise: HalfOutputSegIdx,
     counter_clockwise: HalfOutputSegIdx,
@@ -182,7 +182,7 @@ impl std::fmt::Debug for PointNeighbors {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Topology<F: Float> {
     /// Indexed by `SegIdx`.
     pub shape_a: Vec<bool>,
@@ -672,10 +672,10 @@ impl<F: Float> Topology<F> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct ContourIdx(pub usize);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Contour<F: Float> {
     pub points: Vec<Point<F>>,
     pub outer: bool,
@@ -692,7 +692,7 @@ impl<F: Float> Default for Contour<F> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Contours<F: Float> {
     pub contours: Vec<Contour<F>>,
 }
@@ -754,7 +754,6 @@ mod tests {
         Point::new(x.try_into().unwrap(), y.try_into().unwrap())
     }
 
-    // TODO: make these snapshot tests
     #[test]
     fn square() {
         let segs =
@@ -762,7 +761,8 @@ mod tests {
         let eps = NotNan::try_from(0.01).unwrap();
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
-        dbg!(top);
+
+        insta::assert_ron_snapshot!(top);
     }
 
     #[test]
@@ -772,7 +772,8 @@ mod tests {
         let eps = NotNan::try_from(0.01).unwrap();
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
-        dbg!(top);
+
+        insta::assert_ron_snapshot!(top);
     }
 
     #[test]
@@ -783,7 +784,8 @@ mod tests {
         let eps = NotNan::try_from(0.01).unwrap();
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
-        dbg!(top);
+
+        insta::assert_ron_snapshot!(top);
     }
 
     #[test]
@@ -800,7 +802,8 @@ mod tests {
         let eps = NotNan::try_from(0.01).unwrap();
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
-        dbg!(top);
+
+        insta::assert_ron_snapshot!(top);
     }
 
     #[test]
@@ -814,8 +817,7 @@ mod tests {
         let eps = NotNan::try_from(0.01).unwrap();
         let weaks = sweep(&segs, &eps);
         let top = Topology::build(&weaks, &segs, &eps);
-        dbg!(&top);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
-        dbg!(contours);
+        insta::assert_ron_snapshot!((top, contours));
     }
 }
