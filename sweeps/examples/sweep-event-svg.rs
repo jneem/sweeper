@@ -4,9 +4,9 @@ use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
 use sweeps::{
-    algorithms::weak::{Position, PositionKind},
     geom::Point,
     sweep::Segments,
+    weak_ordering::{Position, PositionKind},
 };
 
 type Float = NotNan<f64>;
@@ -145,9 +145,9 @@ pub fn main() -> anyhow::Result<()> {
     let segments = svg_to_segments(&tree);
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
-    let weak_lines = sweeps::algorithms::weak::sweep(&segments, &eps);
+    let weak_lines = sweeps::weak_ordering::sweep(&segments, &eps);
     let mut collector = SegmentCollector::new(segments.segs.len());
-    sweeps::algorithms::weak::weaks_to_events_sparse(&weak_lines, &segments, &eps, |y, ev| {
+    sweeps::weak_ordering::weaks_to_events_sparse(&weak_lines, &segments, &eps, |y, ev| {
         collector.handle(y, ev)
     });
 

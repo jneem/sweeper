@@ -86,7 +86,7 @@ pub fn main() -> anyhow::Result<()> {
     let segments = svg_to_segments(&tree);
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
-    let weak_lines = sweeps::algorithms::weak::sweep(&segments, &eps);
+    let weak_lines = sweeps::weak_ordering::sweep(&segments, &eps);
     let top = Topology::build(&weak_lines, &segments, &eps);
 
     // I tried using `tree.root().abs_bounding_box()`, but I don't understand the output.

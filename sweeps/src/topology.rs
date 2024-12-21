@@ -1,10 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::{
-    algorithms::weak::{HSeg, PositionIter, WeakSweepLinePair},
     geom::Point,
     num::Float,
     sweep::{SegIdx, Segments},
+    weak_ordering::{HSeg, PositionIter, WeakSweepLinePair},
 };
 
 /// We support boolean operations, so a "winding number" for us is two winding
@@ -792,7 +792,7 @@ impl<F: Float> Default for Contours<F> {
 mod tests {
     use ordered_float::NotNan;
 
-    use crate::{algorithms::weak::sweep, geom::Point, sweep::Segments};
+    use crate::{geom::Point, sweep::Segments, weak_ordering::sweep};
 
     use super::Topology;
 
