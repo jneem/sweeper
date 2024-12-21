@@ -184,6 +184,27 @@ impl<F: Float> Segment<F> {
         }
     }
 
+    pub fn intersection_y(&self, other: &Self) -> Option<F> {
+        let y0 = self.start.y.clone().max(other.start.y.clone());
+        let y1 = self.end.y.clone().min(other.end.y.clone());
+
+        assert!(y1 >= y0);
+
+        let dx0 = other.at_y(&y0) - self.at_y(&y0);
+        let dx1 = other.at_y(&y1) - self.at_y(&y1);
+        let denom = dx0.clone() - dx1;
+        if denom <= F::from_f32(0.0) {
+            return None;
+        }
+
+        let t = dx0 / denom;
+        if t.ge(&F::from_f32(0.0)) && t.le(&F::from_f32(1.0)) {
+            Some(y0.clone() + t * (y1 - y0))
+        } else {
+            None
+        }
+    }
+
     pub fn to_exact(&self) -> Segment<Rational> {
         Segment {
             start: self.start.to_exact(),
@@ -258,7 +279,23 @@ pub(crate) mod tests {
         }
     }
 
+    fn f32_segment_and_y() -> BoxedStrategy<(Segment<NotNan<f32>>, NotNan<f32>)> {
+        Segment::<NotNan<f32>>::reasonable()
+            .prop_flat_map(|s| {
+                let y0 = s.start.y.into_inner();
+                let y1 = s.end.y.into_inner();
+
+                (
+                    Just(s),
+                    (y0..=y1).prop_map(|y| NotNan::try_from(y).unwrap()),
+                )
+            })
+            .boxed()
+    }
+
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000000))]
+
         #[test]
         fn approx_y(s0 in Segment::<NotNan<f32>>::reasonable(), s1 in Segment::<NotNan<f32>>::reasonable()) {
             if s0.start.y <= s1.end.y && s1.start.y <= s0.end.y {
@@ -267,6 +304,68 @@ pub(crate) mod tests {
                     assert!((approx_y.lower.to_exact()..=approx_y.upper.to_exact()).contains(&y));
                 }
             }
+        }
+
+
+        // A quick sanity check that f64 addition is as accurate as I think it is. Changing the -24 to
+        // a -25 makes this test fail.
+        #[test]
+        fn addition_accuracy(x in NotNan::<f32>::reasonable(), y in NotNan::<f32>::reasonable()) {
+            let error_bound = Rational::try_from(2e6f64 * (-24.0f64).exp2()).unwrap();
+            let a = x.to_exact();
+            let b = y.to_exact();
+            let c = a + b;
+
+            let z = (x + y).to_exact();
+            assert!((c - z).abs() <= error_bound);
+        }
+
+        // According to our analysis, the error in calculating a horizontal position should be
+        // at most 8 times the base accuracy.
+        // Empirically, changing the 21 to 22 doesn't break the test so either our bound is loose
+        // or proptest isn't finding the worst case. Changing it to 23 finds a failure, though.
+        #[test]
+        fn horizontal_accuracy((s, y) in f32_segment_and_y()) {
+            let error_bound = Rational::try_from(2e6f64 * (-21.0f64).exp2()).unwrap();
+            let s1 = s.to_exact();
+            let y1 = y.to_exact();
+
+            assert!((s1.at_y(&y1) - s.at_y(&y).to_exact()).abs() <= error_bound);
+        }
+
+        // Check the analysis of y intersection heights. This one seems even looser than the horizontal position one:
+        // our bound has a 64, but I had to reduce it to 2 before proptest found a counter-example.
+        #[test]
+        fn vertical_accuracy(s0 in Segment::<NotNan<f32>>::reasonable(), s1 in Segment::<NotNan<f32>>::reasonable()) {
+            if s0.start.y > s1.end.y || s1.start.y > s0.end.y {
+                return Ok(());
+            }
+            let t0 = s0.to_exact();
+            let t1 = s1.to_exact();
+            if t0.is_horizontal() || t1.is_horizontal() {
+                return Ok(());
+            }
+
+            let inv_slope0 = ((t0.end.x.clone() - t0.start.x.clone()) / (t0.end.y.clone() - t0.start.y.clone())).abs();
+            let inv_slope1 = ((t1.end.x.clone() - t1.start.x.clone()) / (t1.end.y .clone()- t1.start.y.clone())).abs();
+            let inv_slope = inv_slope0.max(inv_slope1);
+
+            let delta = Rational::try_from(2e6f64 * (-24.0f64).exp2() * 64.0).unwrap();
+            let error_bound = delta.clone() * Rational::from(9i32) / Rational::from(16i32) * (Rational::from(1i32) + inv_slope);
+
+            let y0 = t0.start.y.clone().max(t1.start.y.clone());
+            let y1 = t0.end.y.clone().min(t1.end.y.clone());
+            if t0.at_y(&y1) < t1.at_y(&y1) + (delta * Rational::from(3i32)) / Rational::from(4i32) {
+                return Ok(());
+            }
+            if t0.at_y(&y0) > t1.at_y(&y0) {
+                return Ok(());
+            }
+
+            let y = s0.intersection_y(&s1).unwrap().to_exact();
+            let x0 = t0.at_y(&y);
+            let x1 = t1.at_y(&y);
+            assert!((x0 - x1).abs() <= error_bound);
         }
     }
 }
