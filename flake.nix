@@ -34,7 +34,7 @@
             libclang
             libxkbcommon
             typst
-            typst-lsp
+            tinymist
             vulkan-loader
             wayland
             wayland-protocols

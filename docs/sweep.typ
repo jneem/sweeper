@@ -2,6 +2,7 @@
 #import "@preview/cetz:0.3.1"
 #import "@preview/lovelace:0.3.0": *
 #set par(justify: true)
+#set math.equation(numbering: "(1)")
 
 #show: thmrules
 #let lemma = thmbox("lemma", "Lemma")
@@ -38,6 +39,8 @@ figure(
 )
 }
 
+#let fl = text([fl])
+
 We'll be talking about sweep line algorithms, where the sweep line is horizontal and increasing in $y$.
 Therefore, every line segment "starts" at the coordinate with smaller $y$ and "ends" at the coordinate
 with larger $y$ (we'll assume for now that there are no horizontal segments). We'll parametrize each
@@ -66,17 +69,17 @@ caption: "A segment and its angle"
 
 We'll be dealing with inexact arithmetic, so let's define some "error bars" on our line segments.
 For an error parameter $epsilon > 0$, offsetting from $alpha$ by $plus.minus epsilon$ in the perpendicular-to-$alpha$ direction
-is the same as offsetting by $alpha plus.minus epsilon / (|cos theta_alpha|)$ in the horizontal direction.
+is the same as offsetting by $alpha plus.minus epsilon / (|sin theta_alpha|)$ in the horizontal direction.
 Roughly speaking, the "error bars" on $alpha$ amount to adding this horizontal error. But we'll be slightly
 more accurate around the corners, by truncating these error bars to the horizontal extents of $alpha$. Precisely, we define
 
 $
-alpha_(+,epsilon)(y) = min(alpha(y) + epsilon / (|cos theta_alpha|), max(alpha(y_0), alpha(y_1)) + epsilon) \
-alpha_(-,epsilon)(y) = max(alpha(y) - epsilon / (|cos theta_alpha|), min(alpha(y_0), alpha(y_1)) - epsilon) \
+alpha_(+,epsilon)(y) = min(alpha(y) + epsilon / (|sin theta_alpha|), max(alpha(y_0), alpha(y_1)) + epsilon) \
+alpha_(-,epsilon)(y) = max(alpha(y) - epsilon / (|sin theta_alpha|), min(alpha(y_0), alpha(y_1)) - epsilon) \
 $
 
 In pictures, the gray shaded region is the region between $alpha_(-,epsilon)$ and $alpha_(+,epsilon)$:
-The point of the scaling by $|cos theta_alpha|$ is to make this an approximation of an $epsilon$-neighborhood (in the
+The point of the scaling by $|sin theta_alpha|$ is to make this an approximation of an $epsilon$-neighborhood (in the
 perpendicular direction) of the line segment. The truncation near the corners ensures that if $x$ is between
 $alpha_(-,epsilon)(y)$ and $alpha_(+,epsilon)(y)$ then it is within $sqrt(2) epsilon$ of $alpha$.
 
@@ -552,7 +555,7 @@ height. Note that because the sweep line changes at a discrete set of heights,
 at every important height $y$ we actually have two weakly-ordered sweep line:
 the "old" one from infinitesmally before $y$ height and the "new" one from $y$
 onwards. Because everything is continuous and the weak ordering conditions are
-closed, both the old and new sweep lines satisfy the weak ordering conditions
+closed, both the old and new sweep lines satisfy the weak ordering condi0.2tions
 at $y$.
 
 The algorithm goes like this: at every important height we use
@@ -587,3 +590,194 @@ heights must be identical.
 We'd like to avoid subdividing every segment at every important height. This basically
 involves detecting which segments need to be divided and ignoring the rest. It's implemented
 but not yet written up (TODO).
+
+= Accuracy analysis
+
+We're going to implement some algorithms in floating point. Suppose $p$ is the number of mantissa bits
+of the floating-point type, and let $fl(t)$ denote the rounding function. Let $epsilon_0 = 2^(-1-p)$;
+this is the relative error of the rounding function for all normal numbers: for a real number $x$,
+as long as $fl(x)$ is finite and non-subnormal,
+$
+fl(x) = x plus.minus epsilon_0 |x|.
+$
+Now, if the result of floating point addition or subtraction is subnormal then it is exact; therefore,
+for any floating-point $x$ and $y$, if $x - y$ and $x + y$ don't overflow then after rounding they
+have relative error at most $epsilon_0$.
+
+#lemma[
+  If $y_0 <= y <= y_1$ are floating-point numbers and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
+  the naive way gives an absolute error of
+  at most $3 epsilon_0 + 4 epsilon_0^2$.
+]<lem-ratio-error>
+
+#proof[
+The assumption $y_0 <= y <= y_1$ ensures that $y - y_0$ and $y_1 - y_0$ do not overflow. Therefore
+
+$
+fl(y - y_0) &= (y - y_0) (1 plus.minus epsilon_0) \
+fl(y + y_0) &= (y + y_0) (1 plus.minus epsilon_0)
+$
+and so
+$
+fl(y - y_0) /
+fl(y_1 - y_0) = (y - y_0) / (y_1 - y_0) times
+ (1 plus.minus epsilon_0) / (1 plus.minus epsilon_0).
+$
+For the upper bound,
+$
+ (1 + epsilon_0) / (1 - epsilon_0) = (1 + epsilon_0) (1 + epsilon_0 + epsilon_0^2 / (1 - epsilon_0))
+= 1 + 2 epsilon_0 + 2 / (1 - epsilon_0) epsilon_0^2 <= 1 + 2 epsilon_0 + 4 epsilon_0^2.
+$
+For the lower bound,
+$
+ (1 - epsilon_0) / (1 + epsilon_0) = 1 - epsilon_0 - (epsilon_0 (1-epsilon_0)) / (1+epsilon_0) >= 1 - 2 epsilon_0.
+$
+Putting these together,
+$
+fl(y - y_0) /
+fl(y_1 - y_0) = (y - y_0) / (y_1 - y_0) (1 plus.minus (2 epsilon_0 + 4 epsilon_0^2)).
+$
+Since $0 <= (y - y_0) / (y_1 - y_0) <= 1$, this relative error is also an absolute error:
+$
+fl(y - y_0) /
+fl(y_1 - y_0) = (y - y_0) / (y_1 - y_0) plus.minus (2 epsilon_0 + 4 epsilon_0^2).
+$
+The final rounding step adds another absolute error of at most $epsilon_0$.
+]
+
+#lemma[
+Suppose that $x_0$, $x_1$, and $M$ are floating-point numbers with $|x_0|, |x_1| <= M/2$.
+Let $0 <= t <= 1$ be a real number, and let $0 <= hat(t) <= 1$ be a floating point number
+with $|t - hat(t)| <= epsilon$. Then computing $x_0 + t (x_1 - x_0)$ the obvious way gives an
+absolute error of at most $(3 epsilon_0 + epsilon) M$.
+]<lem-convex-combination-error>
+
+#proof[
+Let's first consider the error introduced by approximating $t (x_1 - x_0)$ with $hat(t) fl(x_1 - x_0)$:
+$
+hat(t) fl(x_1 - x_0) = hat(t) (x_1 - x_0)(1 plus.minus epsilon_0) = hat(t) (x_1 - x_0) plus.minus epsilon_0 M,
+$
+where the second approximation follows because $0 <= hat(t) <= 1$ and $|x_1 - x_0| <= M$.
+Since $hat(t) = t plus.minus epsilon$, we continue with
+$
+hat(t) fl(x_1 - x_0)
+= (t plus.minus epsilon) (x_1 - x_0) plus.minus epsilon_0 M,
+= t (x_1 - x_0) plus.minus (epsilon_0 + epsilon) M.
+$
+Rounding the left hand side introduces a relative error of at most $epsilon_0$, which is an absolute error of at most $M epsilon_0$. Therefore,
+$
+fl(hat(t) fl(x_1 - x_0))
+= t (x_1 - x_0) plus.minus (2 epsilon_0 + epsilon) M.
+$
+
+Finally, we subtract both sides from $x_0$ and round one more time. This last rounding introduces a relative error of at most $epsilon_0$,
+which again leads to an absolute error of at most $2 epsilon_0 M$ (and I think maybe the 2 is unnecessary, but let's not worry).
+]
+
+Next, let's analyze the computation of the $y$ intersection point.
+
+#lemma[
+Suppose we have two segments $alpha$ and $beta$. Set $y_0 = y_0(alpha) or y_0(beta)$ and $y_1 = y_1(alpha) and y_1(beta)$
+(these can be computed exactly). Suppose that we can compute $alpha(y)$ and $beta(y)$ to additive accuracy $epsilon$,
+and assume that $beta(y_0) - alpha(y_0) >= 0$ and
+$
+alpha(y_1) - beta(y_1) > 16/3 (epsilon + 2 epsilon_0 M).
+$
+Define $t = (alpha(y_1) - beta(y_1)) / (alpha(y_1) - beta(y_1) + beta(y_0) - alpha(y_0)$ and set $y = y_0 + t(y_1 - y_0)$. The
+natural way to compute $y$ produces an approximation $hat(y)$ satisfying
+$
+|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/m_alpha, 1/m_beta)),
+$
+where $m_alpha$ and $m_beta$ are the slopes of $alpha$ and $beta$.
+]<lem-intersection-height-error>
+
+Basically, this says we can find a good approximate crossing height as long as the two segments cross by at least $16/3 (epsilon + 2 epsilon_0 M)$.
+
+#proof[
+First, note that at least one of $alpha(y_0)$ or $beta(y_0)$ is calculated exactly; similarly for $alpha(y_1)$ and $beta(y_1)$.
+Therefore the absolute error in calculating $alpha(y_1) - beta(y_1)$ is at most $epsilon + epsilon_0 M$ (where the $epsilon_0 M$ comes
+from rounding after the summation) and the absolute error in calculating
+$(alpha(y_1) - beta(y_1)) + (beta(y_0) - alpha(y_0))$ is at most $2 epsilon + 3 epsilon_0 M$.
+These errors aren't independent, though, since both terms involve a computation of $alpha(y_1) - beta(y_1)$.
+Specifically, let $c = alpha(y_1) - beta(y_1)$ and let $d = (alpha(y_1) - beta(y_1)) + (beta(y_0) - alpha(y_0))$; suppose
+our calculation of $c$ has error $epsilon_c$ and our calculation of $d$ has error $epsilon_d$. Then
+
+$
+|epsilon_c - epsilon_d| <= epsilon + 2 epsilon_0 M,
+$ <eq-error-cancellation>
+
+because this is the *additional* error introduced into $d$ by computing $beta(y_0) - alpha(y_0)$ and adding it to the other term.
+
+Now we consider the quotient
+
+$
+(c + epsilon_c) / (d + epsilon_d)
+&= c / (d (1 + epsilon_d/d)) + epsilon_c / (d (1 + epsilon_d/d)) \
+&= c / d (1 - epsilon_d/d + (epsilon_d/d)^2 / (1 + epsilon_d/d)) + epsilon_c / d (1 - (epsilon_d/d)/(1 + epsilon_d / d)).
+$
+
+We've assumed that $1 + epsilon_d/d >= 1/2$, and so the error
+$
+abs((c + epsilon_c) / (d + epsilon_d) - c/d)
+$
+is at most
+$
+& abs(c / d ( - epsilon_d/d + (epsilon_d/d)^2 / (1 + epsilon_d/d)) + epsilon_c / d (1 - (epsilon_d/d)/(1 + epsilon_d / d))) \
+& <= abs(- c / d epsilon_d/d + epsilon_c / d ) + 2 c/d (epsilon_d/d)^2 + 2 abs(epsilon_c epsilon_d) / d^2 \
+& <= c/d abs(epsilon_c/d - epsilon_d/d) + (1 - c/d) abs(epsilon_c/d) + 2 (epsilon_d/d)^2 + 2 abs(epsilon_c epsilon_d) / d^2,
+$
+where in the last line we recall that $0 <= c/d <= 1$. Now, recall from @eq-error-cancellation and the paragraph before it
+that both $abs(epsilon_c)$ and $abs(epsilon_c - epsilon_d)$ are bounded by $epsilon + 2 epsilon_0 M$, and that
+$abs(epsilon_d)$ is bounded by $2 epsilon + 3 epsilon_0 M$. Therefore, our computation of $c/d$ (which, recall, we called $t$ above) has absolute error of at most
+
+$
+(epsilon + 2 epsilon_0 M)/d + 4 (2 epsilon + 3 epsilon_0 M)^2 / d^2.
+$
+
+Let's call this expression $epsilon_t$.
+
+By @lem-convex-combination-error, the computation of $y = y_0 + t (y_1 - y_0)$ has absolute error at most $(2 epsilon_0 + epsilon_t) |y_1 - y_0| + epsilon_0 M$.
+Let's see what this means for the horizontal accuracy of $alpha(y)$ and $beta(y)$. We can write
+$
+alpha(y) = alpha(y_0) + (y - y_0) / (y_1 - y_0) (alpha(y_1) - alpha(y_0)),
+$
+and similarly for $beta(y)$. Combining these and recalling our definitions of $c$ and $d$,
+$
+alpha(y) - beta(y) = -c + (y - y_0) / (y_1 - y_0) d.
+$
+For the true value of $y$, this is zero of course. With our error bound of $(2 epsilon_0 + epsilon_t) |y_1 - y_0| + epsilon_0 M$ on our
+approximation of $y$ (let's call it $hat(y)$),
+$
+abs(alpha(hat(y)) - beta(hat(y))) <= (2 epsilon_0 + epsilon_t) d + (epsilon_0 M) / (y_1 - y_0) d
+<= epsilon_t d + 3 epsilon_0 (M d) / (y_1 - y_0).
+$
+
+If we assume that $16 (epsilon + 2 epsilon_0 M) / d <= 3$ then $epsilon_t d <= 4 epsilon + 8 epsilon_0 M$. 
+Since $d/(y_1 - y_1)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
+the maximum of these inverse-slopes.
+]
+
+Putting all this together (and handling the "chamfers" yet):
+#lemma[
+Assume all line segments are inside the square $[-M/2, M/2]^2$,
+and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
+
+- We can compute $x$ coordinates of line segments to additive accuracy $delta/8$.
+- If $alpha$ $(3 delta)/4$-crosses $beta$, we can compute a crossing height $hat(y)$ such
+  that
+  $
+  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/m_alpha, 1/m_beta)).
+  $
+]
+
+#proof[
+We compute $x$ coordinates by first computing $t = (y - y_0) / (y_1 - y_0)$ (with error at most $3 epsilon_0 + 4 epsilon_0^2$ by
+@lem-ratio-error). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
+can compute the horizontal coordinate with error at most $(6 epsilon_0 + 4 epsilon_0^2)M$. If $epsilon_0 <= 1/4$ as we assumed,
+this is at most $7 epsilon_0 M <= delta/8$. This proves the first claim.
+
+For the second claim, we apply @lem-intersection-height-error with $epsilon = (6 epsilon_0 + 4 epsilon_0^2) M$.
+With this $epsilon$, $epsilon + 2 epsilon_0 M) <= 9 epsilon_0 M$ and so $16/3 (epsilon + 2 epsilon_0 M) <= 48 epsilon_0 M = (3 delta)/4$.
+Thus, if $alpha$ $(3 delta)/4$-crosses $beta$ then the assumptions of @lem-intersection-height-error are satisfied
+(and in the conclusion, $4 (epsilon + 2 epsilon_0) M <= 36 epsilon_0 M = (9 delta) /16 $.
+]
