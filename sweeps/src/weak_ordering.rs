@@ -529,7 +529,7 @@ impl<F: Float> WeakSweepLine<F> {
             self.segs_needing_positions.insert(seg_idx);
         }
         for &seg_idx in self.segs[0..pos].iter().rev() {
-            if segments.get(seg_idx).at_y_bound(&self.y).upper - x.clone() < -slack.clone() {
+            if segments.get(seg_idx).at_y(&self.y) - x.clone() < -slack.clone() {
                 break;
             }
             self.segs_needing_positions.insert(seg_idx);
