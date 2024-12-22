@@ -205,6 +205,49 @@ impl<F: Float> Segment<F> {
         }
     }
 
+    /// Checks if `self` crosses `other`, and returns a valid crossing height if so.
+    ///
+    /// This is basically the same as `intersection_y` but it's a little more "special"
+    /// because it's tailored to the needs of our weak ordering algorithm. First of all,
+    /// this should only be called when `self` starts of "to the left" (with some wiggle
+    /// room allowed) of `other`. If we find (numerically, approximately) that `self`
+    /// starts to the right and ends more to the right, we'll return the smallest shared
+    /// height as the intersection height.
+    ///
+    /// This is guaranteed to find a crossing height if `self` ends at least `eps` to the right of `other`.
+    pub fn crossing_y(&self, other: &Self, eps: &F) -> Option<F> {
+        let y0 = self.start.y.clone().max(other.start.y.clone());
+        let y1 = self.end.y.clone().min(other.end.y.clone());
+
+        assert!(y1 >= y0);
+
+        let dx0 = self.at_y(&y0) - other.at_y(&y0);
+        let dx1 = self.at_y(&y1) - other.at_y(&y1);
+
+        // According the the analysis, dx1 is accurate to with eps / 8, and the analysis also
+        // requires a threshold or 3 eps / 4. So we compare to 7 eps / 8.
+        if dx1 < eps.clone() * F::from_f32(0.875) {
+            return None;
+        }
+
+        if dx0 >= F::from_f32(0.0) {
+            // If we're here, we've already compared the endpoint and decided
+            // that there's a crossing. Since we think they started in the wrong
+            // order, declare y0 as the crossing.
+            return Some(y0);
+        }
+
+        let denom = dx1 - dx0.clone();
+        let t = -dx0 / denom;
+        debug_assert!(t.ge(&F::from_f32(0.0)));
+        debug_assert!(t.le(&F::from_f32(1.0)));
+
+        // It should be impossible to have y0 + t * (y1 - y0) < y0, but I think with
+        // rounding it's possible to have y0 + t * (y1 - y0) > y1. To be sure, truncate
+        // the upper bound.
+        Some((y0.clone() + t * (y1.clone() - y0)).min(y1))
+    }
+
     pub fn to_exact(&self) -> Segment<Rational> {
         Segment {
             start: self.start.to_exact(),
@@ -285,10 +328,16 @@ pub(crate) mod tests {
                 let y0 = s.start.y.into_inner();
                 let y1 = s.end.y.into_inner();
 
-                (
-                    Just(s),
-                    (y0..=y1).prop_map(|y| NotNan::try_from(y).unwrap()),
-                )
+                // proptest's float sampler doesn't like a range like x..=x
+                // https://github.com/proptest-rs/proptest/issues/343
+                if y0 < y1 {
+                    (
+                        Just(s),
+                        (y0..=y1).prop_map(|y| NotNan::try_from(y).unwrap()).boxed(),
+                    )
+                } else {
+                    (Just(s), Just(NotNan::try_from(y0).unwrap()).boxed())
+                }
             })
             .boxed()
     }

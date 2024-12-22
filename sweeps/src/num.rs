@@ -9,6 +9,7 @@ pub trait Float:
     + std::ops::Sub<Self, Output = Self>
     + std::ops::Mul<Self, Output = Self>
     + std::ops::Div<Self, Output = Self>
+    + std::ops::Neg<Output = Self>
     + for<'a> std::ops::Add<&'a Self, Output = Self>
     + for<'a> std::ops::Sub<&'a Self, Output = Self>
     + for<'a> std::ops::Mul<&'a Self, Output = Self>
