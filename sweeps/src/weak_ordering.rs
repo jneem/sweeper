@@ -18,7 +18,8 @@ use malachite::Rational;
 use crate::{
     geom::Segment,
     num::Float,
-    sweep::{SegIdx, Segments, SweepEvent, SweepEventKind},
+    segments::{SegIdx, Segments},
+    sweep::{SweepEvent, SweepEventKind},
 };
 
 #[derive(Clone, Debug)]
@@ -383,10 +384,6 @@ impl<F: Float> State<F> {
                 self.exits.insert(seg_idx);
             }
         }
-    }
-
-    pub fn finished(&self) -> bool {
-        self.events.inner.is_empty()
     }
 
     pub fn check_invariants(&self) {
@@ -1156,7 +1153,7 @@ mod tests {
             f32_perturbation, f64_perturbation, perturbation, rational_perturbation,
             realize_perturbation, FloatPerturbation, Perturbation,
         },
-        sweep::Segments,
+        segments::Segments,
     };
 
     fn mk_segs(xs: &[(f64, f64)]) -> Segments<NotNan<f64>> {

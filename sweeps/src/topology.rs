@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::{
     geom::Point,
     num::Float,
-    sweep::{SegIdx, Segments},
+    segments::{SegIdx, Segments},
     weak_ordering::{self, HSeg, PositionIter, WeakSweepLinePair},
 };
 
@@ -793,7 +793,7 @@ impl<F: Float> Default for Contours<F> {
 mod tests {
     use ordered_float::NotNan;
 
-    use crate::{geom::Point, sweep::Segments};
+    use crate::{geom::Point, segments::Segments};
 
     use super::Topology;
 

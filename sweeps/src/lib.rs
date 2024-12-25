@@ -1,10 +1,17 @@
 #![feature(float_next_up_down, array_windows)]
 
-pub mod geom;
-pub mod num;
-pub mod sweep;
-pub mod topology;
-pub mod weak_ordering;
+mod geom;
+mod num;
+mod segments;
+mod sweep;
+mod topology;
+mod weak_ordering;
+
+pub use geom::{Point, Segment};
+pub use num::Float;
+pub use segments::{SegIdx, Segments};
+pub use topology::Topology;
+pub use weak_ordering::{sweep, Position, PositionKind};
 
 #[cfg(test)]
 pub mod perturbation;

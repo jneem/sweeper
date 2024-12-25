@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
-use sweeps::{geom::Point, sweep::Segments, topology::Topology};
+use sweeps::{Point, Segments, Topology};
 
 type Float = NotNan<f64>;
 

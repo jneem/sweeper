@@ -3,11 +3,7 @@ use std::{collections::HashSet, path::PathBuf};
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
-use sweeps::{
-    geom::Point,
-    sweep::Segments,
-    weak_ordering::{Position, PositionKind},
-};
+use sweeps::{Point, Position, PositionKind, Segments};
 
 type Float = NotNan<f64>;
 
@@ -146,7 +142,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
     let mut collector = SegmentCollector::new(segments.segs.len());
-    sweeps::weak_ordering::sweep(&segments, &eps, |y, ev| collector.handle(y, ev));
+    sweeps::sweep(&segments, &eps, |y, ev| collector.handle(y, ev));
 
     let segs = collector.finish(&segments);
 

@@ -3,7 +3,7 @@ use std::{collections::HashSet, path::PathBuf, str::FromStr};
 use clap::Parser;
 use ordered_float::NotNan;
 use svg::Document;
-use sweeps::{geom::Point, sweep::Segments, topology::Topology};
+use sweeps::{Point, Segments, Topology};
 
 type Float = NotNan<f64>;
 
