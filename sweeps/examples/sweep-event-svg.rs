@@ -3,7 +3,7 @@ use std::{collections::HashSet, path::PathBuf};
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
-use sweeps::{Point, Position, PositionKind, Segments};
+use sweeps::{OutputEvent, OutputEventKind, Point, Segments};
 
 type Float = NotNan<f64>;
 
@@ -92,16 +92,16 @@ impl SegmentCollector {
         self.y = y;
     }
 
-    fn handle(&mut self, y: Float, ev: Position<Float>) {
+    fn handle(&mut self, y: Float, ev: OutputEvent<Float>) {
         let seg_idx = ev.seg_idx.0;
         if y > self.y {
             self.advance_y(y);
         }
         match ev.kind {
-            PositionKind::Point { x, .. } => {
+            OutputEventKind::Point { x, .. } => {
                 self.segs[seg_idx].push(Point::new(x, y));
             }
-            PositionKind::Horizontal { x0, x1, .. } => {
+            OutputEventKind::Horizontal { x0, x1, .. } => {
                 let (segs, x0, x1) = if x0 < x1 {
                     (&mut self.segs[seg_idx], x0, x1)
                 } else {

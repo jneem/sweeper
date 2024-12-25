@@ -11,7 +11,7 @@ pub use geom::{Point, Segment};
 pub use num::Float;
 pub use segments::{SegIdx, Segments};
 pub use topology::Topology;
-pub use weak_ordering::{sweep, Position, PositionKind};
+pub use weak_ordering::{sweep, OutputEvent, OutputEventKind};
 
 #[cfg(test)]
 pub mod perturbation;
