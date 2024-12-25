@@ -4,7 +4,7 @@ use crate::{
     geom::Point,
     num::Float,
     sweep::{SegIdx, Segments},
-    weak_ordering::{HSeg, PositionIter, WeakSweepLinePair},
+    weak_ordering::{self, HSeg, PositionIter, WeakSweepLinePair},
 };
 
 /// We support boolean operations, so a "winding number" for us is two winding
@@ -337,9 +337,10 @@ impl<F: Float> Topology<F> {
         ret
     }
 
-    pub fn build(weaks: &[WeakSweepLinePair<F>], segments: &Segments<F>, eps: &F) -> Self {
+    pub fn build(segments: &Segments<F>, eps: &F) -> Self {
         let mut ret = Self::from_segments(segments);
-        for line in weaks {
+        let mut sweep_state = weak_ordering::State::new(segments, eps.clone());
+        while let Some(line) = sweep_state.next_line() {
             for (start, end) in line.changed_intervals(segments, eps) {
                 let positions = line.position_range((start, end), segments, eps);
                 let scan_left_seg = if start == 0 {
@@ -360,7 +361,7 @@ impl<F: Float> Topology<F> {
         &mut self,
         mut pos: PositionIter<F>,
         segments: &Segments<F>,
-        lines: &WeakSweepLinePair<F>,
+        lines: WeakSweepLinePair<'_, F>,
         range: (usize, usize),
         mut scan_left: Option<OutputSegIdx>,
     ) {
@@ -792,7 +793,7 @@ impl<F: Float> Default for Contours<F> {
 mod tests {
     use ordered_float::NotNan;
 
-    use crate::{geom::Point, sweep::Segments, weak_ordering::sweep};
+    use crate::{geom::Point, sweep::Segments};
 
     use super::Topology;
 
@@ -805,8 +806,7 @@ mod tests {
         let segs =
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let weaks = sweep(&segs, &eps);
-        let top = Topology::build(&weaks, &segs, &eps);
+        let top = Topology::build(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -816,8 +816,7 @@ mod tests {
         let segs =
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let weaks = sweep(&segs, &eps);
-        let top = Topology::build(&weaks, &segs, &eps);
+        let top = Topology::build(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -828,8 +827,7 @@ mod tests {
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
         segs.add_points([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)], true);
         let eps = NotNan::try_from(0.01).unwrap();
-        let weaks = sweep(&segs, &eps);
-        let top = Topology::build(&weaks, &segs, &eps);
+        let top = Topology::build(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -846,8 +844,7 @@ mod tests {
             p(0.0, 1.0),
         ]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let weaks = sweep(&segs, &eps);
-        let top = Topology::build(&weaks, &segs, &eps);
+        let top = Topology::build(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -861,8 +858,7 @@ mod tests {
             true,
         );
         let eps = NotNan::try_from(0.01).unwrap();
-        let weaks = sweep(&segs, &eps);
-        let top = Topology::build(&weaks, &segs, &eps);
+        let top = Topology::build(&segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));
@@ -875,8 +871,7 @@ mod tests {
         segs.add_points([p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)], true);
         segs.add_points([p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)], true);
         let eps = NotNan::try_from(0.01).unwrap();
-        let weaks = sweep(&segs, &eps);
-        let top = Topology::build(&weaks, &segs, &eps);
+        let top = Topology::build(&segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));

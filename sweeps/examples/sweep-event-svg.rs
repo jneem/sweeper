@@ -145,11 +145,8 @@ pub fn main() -> anyhow::Result<()> {
     let segments = svg_to_segments(&tree);
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
-    let weak_lines = sweeps::weak_ordering::sweep(&segments, &eps);
     let mut collector = SegmentCollector::new(segments.segs.len());
-    sweeps::weak_ordering::weaks_to_events_sparse(&weak_lines, &segments, &eps, |y, ev| {
-        collector.handle(y, ev)
-    });
+    sweeps::weak_ordering::sweep(&segments, &eps, |y, ev| collector.handle(y, ev));
 
     let segs = collector.finish(&segments);
 

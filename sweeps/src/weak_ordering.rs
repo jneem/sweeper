@@ -25,23 +25,6 @@ use crate::{
 pub struct WeakSweepLine<F: Float> {
     pub y: F,
     pub segs: Vec<SegIdx>,
-    // For the sparse realization, this is the collection of segments that
-    // we know need to be given explicit positions in the current sweep line.
-    //
-    // These include:
-    // - any segments that changed order with any other segments
-    // - any segments that entered or exited
-    // - any segments that are between the endpoints of contour-adjacent segments.
-    pub segs_needing_positions: HashSet<SegIdx>,
-    // Segments marked as having exited the sweep-line. We don't remove them
-    // immediately because that shifts indices around and makes it harder to
-    // compare old vs. new sweep-lines. Instead, we remember that we're supposed
-    // to remove them and then actually remove them when we advance `y`.
-    //
-    // This could potentially be part of the `segs` list instead of as a separate
-    // map.
-    pub exits: HashSet<SegIdx>,
-    pub entrances: HashSet<SegIdx>,
 }
 
 impl<F: Float> WeakSweepLine<F> {
@@ -50,13 +33,7 @@ impl<F: Float> WeakSweepLine<F> {
     }
 
     pub fn new_with_segs(y: F, segs: Vec<SegIdx>) -> Self {
-        Self {
-            y,
-            segs,
-            segs_needing_positions: HashSet::new(),
-            exits: HashSet::new(),
-            entrances: HashSet::new(),
-        }
+        Self { y, segs }
     }
 }
 
@@ -131,28 +108,117 @@ impl<F: Float> EventQueue<F> {
 
 #[derive(Clone, Debug)]
 pub struct State<F: Float> {
+    pub y: F,
     pub eps: F,
     pub line: WeakSweepLine<F>,
+    pub old_line: WeakSweepLine<F>,
     pub events: EventQueue<F>,
+    // TODO: maybe borrow Segments?
     pub segments: Segments<F>,
+
+    // For the sparse realization, this is the collection of segments that
+    // we know need to be given explicit positions in the current sweep line.
+    //
+    // These include:
+    // - any segments that changed order with any other segments
+    // - any segments that entered or exited
+    // - any segments that are between the endpoints of contour-adjacent segments.
+    pub segs_needing_positions: HashSet<SegIdx>,
+    // Segments marked as having exited the sweep-line. We don't remove them
+    // immediately because that shifts indices around and makes it harder to
+    // compare old vs. new sweep-lines. Instead, we remember that we're supposed
+    // to remove them and then actually remove them when we advance `y`.
+    //
+    // This could potentially be part of the `segs` list instead of as a separate
+    // map.
+    pub exits: HashSet<SegIdx>,
+    pub entrances: HashSet<SegIdx>,
 }
 
 impl<F: Float> State<F> {
+    pub fn new(segments: &Segments<F>, eps: F) -> Self {
+        let events = EventQueue::from_segments(segments);
+        let line = WeakSweepLine::new(events.next_y().unwrap().clone());
+
+        State {
+            eps,
+            old_line: line.clone(),
+            line,
+            y: events.next_y().unwrap().clone(),
+            events,
+            segments: segments.clone(),
+            segs_needing_positions: HashSet::new(),
+            exits: HashSet::new(),
+            entrances: HashSet::new(),
+        }
+    }
+
+    pub fn next_line(&mut self) -> Option<WeakSweepLinePair<'_, F>> {
+        // Process the exits from the last y position.
+        self.process_exits();
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
+        let y = self.events.next_y().cloned()?;
+        self.advance(y.clone());
+        #[cfg(debug_assertions)]
+        self.check_invariants();
+
+        // Process all the enter events at this y.
+        while self.events.next_is_stage_1(&y) {
+            self.step();
+            #[cfg(debug_assertions)]
+            self.check_invariants();
+        }
+
+        // Copy the new line to the old line. Basically self.old_line = self.line.clone(), but keeping the
+        // old allocation.
+        self.old_line.segs.clear();
+        self.old_line.segs.extend_from_slice(&self.line.segs);
+        self.old_line.y = self.line.y.clone();
+
+        // Process all the reorderings
+        while self.events.next_is_stage_2(&y) {
+            self.step();
+            #[cfg(debug_assertions)]
+            self.check_invariants();
+        }
+
+        // Process all the exit events at this y.
+        while self.events.next_is_at(&y) {
+            self.step();
+            #[cfg(debug_assertions)]
+            self.check_invariants();
+        }
+        self.segs_needing_positions
+            .extend(self.exits.iter().copied());
+
+        Some(WeakSweepLinePair {
+            old_line: &self.old_line,
+            new_line: &self.line,
+            segs_needing_positions: &self.segs_needing_positions,
+            exits: &self.exits,
+            entrances: &self.entrances,
+        })
+    }
+
     fn process_exits(&mut self) {
-        for seg_idx in std::mem::take(&mut self.line.exits) {
+        for &seg_idx in &self.exits {
             let pos = self
                 .line
                 .position(seg_idx)
                 .expect("exit for a segment we don't have");
-            self.remove(pos);
+            self.line.segs.remove(pos);
         }
+        self.exits.clear();
     }
 
     pub fn advance(&mut self, y: F) {
         self.process_exits();
-        self.line.y = y;
-        self.line.segs_needing_positions.clear();
-        self.line.entrances.clear();
+        self.line.y = y.clone();
+        self.y = y;
+        self.segs_needing_positions.clear();
+        self.entrances.clear();
     }
 
     pub fn intersection_scan_right(&mut self, start_idx: usize) {
@@ -165,7 +231,7 @@ impl<F: Float> State<F> {
         let mut height_bound = seg.end.y.clone();
 
         for j in (start_idx + 1)..self.line.segs.len() {
-            if self.line.exits.contains(&self.line.segs[j]) {
+            if self.exits.contains(&self.line.segs[j]) {
                 continue;
             }
             let other = self.segments.get(self.line.segs[j]);
@@ -200,7 +266,7 @@ impl<F: Float> State<F> {
         let mut height_bound = seg.end.y.clone();
 
         for j in (0..start_idx).rev() {
-            if self.line.exits.contains(&self.line.segs[j]) {
+            if self.exits.contains(&self.line.segs[j]) {
                 continue;
             }
             let other = self.segments.get(self.line.segs[j]);
@@ -227,10 +293,6 @@ impl<F: Float> State<F> {
         }
     }
 
-    fn remove(&mut self, pos: usize) {
-        self.line.segs.remove(pos);
-    }
-
     fn scan_for_removal(&mut self, pos: usize) {
         if pos > 0 {
             self.intersection_scan_right(pos - 1);
@@ -255,31 +317,28 @@ impl<F: Float> State<F> {
                 let new_seg = self.segments.get(seg_idx);
                 let pos = self.line.insertion_idx(&self.segments, new_seg, &self.eps);
                 self.insert(pos, seg_idx);
-                self.line.segs_needing_positions.insert(seg_idx);
-                self.line
-                    .mark_endpoint(seg_idx, pos, true, &self.segments, &self.eps);
-                self.line.entrances.insert(seg_idx);
+                self.segs_needing_positions.insert(seg_idx);
+                self.mark_endpoint(seg_idx, pos, true);
+                self.entrances.insert(seg_idx);
             }
             SweepEventKind::Exit(seg_idx) => {
                 // It's important that this goes before `scan_for_removal`, so that
                 // the scan doesn't get confused by the segment that should be marked
                 // for exit.
-                self.line.exits.insert(seg_idx);
+                self.exits.insert(seg_idx);
                 let pos = self
                     .line
                     .position(seg_idx)
                     .expect("exit for a segment we don't have");
                 self.scan_for_removal(pos);
-                self.line.segs_needing_positions.insert(seg_idx);
-                self.line
-                    .mark_endpoint(seg_idx, pos, false, &self.segments, &self.eps);
+                self.segs_needing_positions.insert(seg_idx);
+                self.mark_endpoint(seg_idx, pos, false);
             }
             SweepEventKind::Intersection { left, right } => {
                 let left_idx = self.line.segs.iter().position(|&x| x == left).unwrap();
                 let right_idx = self.line.segs.iter().position(|&x| x == right).unwrap();
                 if left_idx < right_idx {
-                    self.line
-                        .segs_needing_positions
+                    self.segs_needing_positions
                         .extend(&self.line.segs[left_idx..=right_idx]);
                     let left_seg = self.segments.get(left);
                     let eps = &self.eps;
@@ -300,7 +359,7 @@ impl<F: Float> State<F> {
 
                     // Remove them in reverse to make indexing easier.
                     for &(j, _) in to_move.iter().rev() {
-                        self.remove(j);
+                        self.line.segs.remove(j);
                         self.scan_for_removal(j);
                     }
 
@@ -317,13 +376,11 @@ impl<F: Float> State<F> {
                 let new_seg = self.segments.get(seg_idx);
                 let pos = self.line.insertion_idx(&self.segments, new_seg, &self.eps);
                 self.insert(pos, seg_idx);
-                self.line.segs_needing_positions.insert(seg_idx);
-                self.line
-                    .mark_endpoint(seg_idx, pos, true, &self.segments, &self.eps);
-                self.line
-                    .mark_endpoint(seg_idx, pos, false, &self.segments, &self.eps);
-                self.line.entrances.insert(seg_idx);
-                self.line.exits.insert(seg_idx);
+                self.segs_needing_positions.insert(seg_idx);
+                self.mark_endpoint(seg_idx, pos, true);
+                self.mark_endpoint(seg_idx, pos, false);
+                self.entrances.insert(seg_idx);
+                self.exits.insert(seg_idx);
             }
         }
     }
@@ -358,11 +415,11 @@ impl<F: Float> State<F> {
 
         let eps = self.eps.to_exact();
         for i in 0..self.line.segs.len() {
-            if self.line.exits.contains(&self.line.segs[i]) {
+            if self.exits.contains(&self.line.segs[i]) {
                 continue;
             }
             for j in (i + 1)..self.line.segs.len() {
-                if self.line.exits.contains(&self.line.segs[j]) {
+                if self.exits.contains(&self.line.segs[j]) {
                     continue;
                 }
                 let segi = self.segments.get(self.line.segs[i]).to_exact();
@@ -395,6 +452,34 @@ impl<F: Float> State<F> {
                     }
                 }
             }
+        }
+    }
+
+    /// The segment `idx` just entered (or exited) at index `idx`. If any of
+    /// the nearby (in the sweep-line order) segments are nearby (physically),
+    /// record the fact that they need to be given explicit horizontal
+    /// positions.
+    fn mark_endpoint(&mut self, idx: SegIdx, pos: usize, enter: bool) {
+        let x = if enter {
+            &self.segments.get(idx).start.x
+        } else {
+            &self.segments.get(idx).end.x
+        };
+
+        // We'll look at horizontal positions to figure out where to stop searching
+        // for nearby points. Those are accurate to eps/8, so set a threshold at eps/4.
+        let slack = self.eps.clone() / F::from_f32(4.0);
+        for &seg_idx in &self.line.segs[(pos + 1)..] {
+            if self.segments.get(seg_idx).lower(&self.y, &self.eps) - x.clone() > slack {
+                break;
+            }
+            self.segs_needing_positions.insert(seg_idx);
+        }
+        for &seg_idx in self.line.segs[0..pos].iter().rev() {
+            if self.segments.get(seg_idx).at_y(&self.y) - x.clone() < -slack.clone() {
+                break;
+            }
+            self.segs_needing_positions.insert(seg_idx);
         }
     }
 }
@@ -525,41 +610,6 @@ impl<F: Float> WeakSweepLine<F> {
         self.segs.iter().position(|&x| x == seg)
     }
 
-    /// The segment `idx` just entered (or exited) at index `idx`. If any of
-    /// the nearby (in the sweep-line order) segments are nearby (physically),
-    /// record the fact that they need to be given explicit horizontal
-    /// positions.
-    fn mark_endpoint(
-        &mut self,
-        idx: SegIdx,
-        pos: usize,
-        enter: bool,
-        segments: &Segments<F>,
-        eps: &F,
-    ) {
-        let x = if enter {
-            &segments.get(idx).start.x
-        } else {
-            &segments.get(idx).end.x
-        };
-
-        // We'll look at horizontal positions to figure out where to stop searching
-        // for nearby points. Those are accurate to eps/8, so set a threshold at eps/4.
-        let slack = eps.clone() / F::from_f32(4.0);
-        for &seg_idx in &self.segs[(pos + 1)..] {
-            if segments.get(seg_idx).lower(&self.y, eps) - x.clone() > slack {
-                break;
-            }
-            self.segs_needing_positions.insert(seg_idx);
-        }
-        for &seg_idx in self.segs[0..pos].iter().rev() {
-            if segments.get(seg_idx).at_y(&self.y) - x.clone() < -slack.clone() {
-                break;
-            }
-            self.segs_needing_positions.insert(seg_idx);
-        }
-    }
-
     /// Returns an iterator of the allowable x positions for a slice of segments.
     fn horizontal_positions<'a>(
         &'a self,
@@ -610,25 +660,25 @@ impl<F: Float> WeakSweepLine<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct WeakSweepLinePair<F: Float> {
-    // TODO: there's redundant state in here. Could refactor some bits out of WeakSweepLine
-    pub old_line: WeakSweepLine<F>,
-    pub new_line: WeakSweepLine<F>,
+pub struct WeakSweepLinePair<'a, F: Float> {
+    pub old_line: &'a WeakSweepLine<F>,
+    pub new_line: &'a WeakSweepLine<F>,
+
+    pub segs_needing_positions: &'a HashSet<SegIdx>,
+    pub exits: &'a HashSet<SegIdx>,
+    pub entrances: &'a HashSet<SegIdx>,
 }
 
-impl<F: Float> WeakSweepLinePair<F> {
+impl<F: Float> Copy for WeakSweepLinePair<'_, F> {}
+
+impl<F: Float> WeakSweepLinePair<'_, F> {
     /// We've marked various segments that need to be given an explicit
     /// horizontal position in the new sweep line, but in order to do that we
     /// may need to consider the positions of other nearby segments. In this
     /// method we explore nearby segments, turning our list of segments needing
     /// positions into a disjoint list of intervals needing positions.
     pub fn changed_intervals(&self, segments: &Segments<F>, eps: &F) -> Vec<(usize, usize)> {
-        let mut changed: BTreeSet<_> = self
-            .new_line
-            .segs_needing_positions
-            .iter()
-            .cloned()
-            .collect();
+        let mut changed: BTreeSet<_> = self.segs_needing_positions.iter().cloned().collect();
         let mut ret = Vec::new();
         let y = &self.new_line.y;
 
@@ -713,11 +763,11 @@ impl<F: Float> WeakSweepLinePair<F> {
                 min_x.clone() - F::from_f32(1.0)
             });
         for (idx, min_x, max_x) in old_xs {
-            let preferred_x = if self.new_line.exits.contains(&idx) {
+            let preferred_x = if self.exits.contains(&idx) {
                 // The best possible position is the true segment-ending position.
                 // (This could change if we want to be more sophisticated at joining contours.)
                 segments.get(idx).end.x.clone()
-            } else if self.new_line.entrances.contains(&idx) {
+            } else if self.entrances.contains(&idx) {
                 // The best possible position is the true segment-ending position.
                 // (This could change if we want to be more sophisticated at joining contours.)
                 segments.get(idx).start.x.clone()
@@ -768,8 +818,8 @@ impl<F: Float> WeakSweepLinePair<F> {
                 panic!("the two ranges should have the same segments");
             };
 
-            let entrance = self.new_line.entrances.contains(&idx);
-            let exit = self.new_line.exits.contains(&idx);
+            let entrance = self.entrances.contains(&idx);
+            let exit = self.exits.contains(&idx);
             let seg = segments.get(idx);
             let kind = match (entrance, exit) {
                 (true, true) => {
@@ -823,64 +873,6 @@ fn merge_adjacent(intervals: impl IntoIterator<Item = (usize, usize)>) -> Vec<(u
         }
     }
     ret.push(last);
-    ret
-}
-
-/// Runs a sweep over all the segments, returning a sweep line at every `y` where
-/// there was an event.
-pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair<F>> {
-    let events = EventQueue::from_segments(segments);
-    let line = WeakSweepLine::new(events.next_y().unwrap().clone());
-
-    let mut state = State {
-        eps: eps.clone(),
-        line,
-        events,
-        segments: segments.clone(),
-    };
-    #[cfg(debug_assertions)]
-    state.check_invariants();
-
-    let mut ret = Vec::new();
-
-    while let Some(y) = state.events.next_y().cloned() {
-        state.advance(y.clone());
-        #[cfg(debug_assertions)]
-        state.check_invariants();
-        // Process all the enter events at this y.
-        while state.events.next_is_stage_1(&y) {
-            state.step();
-            #[cfg(debug_assertions)]
-            state.check_invariants();
-        }
-        let old_line = state.line.clone();
-
-        // Process all the reorderings
-        while state.events.next_is_stage_2(&y) {
-            state.step();
-            #[cfg(debug_assertions)]
-            state.check_invariants();
-        }
-
-        // Process all the exit events at this y.
-        while state.events.next_is_at(&y) {
-            state.step();
-            #[cfg(debug_assertions)]
-            state.check_invariants();
-        }
-        state
-            .line
-            .segs_needing_positions
-            .extend(state.line.exits.iter().copied());
-        ret.push(WeakSweepLinePair {
-            old_line,
-            new_line: state.line.clone(),
-        });
-        state.process_exits();
-        #[cfg(debug_assertions)]
-        state.check_invariants();
-    }
-
     ret
 }
 
@@ -1136,15 +1128,10 @@ impl<F: Float> PositionIter<F> {
     }
 }
 
-/// Converts a sequence of weakly-ordered sweep lines into a sequence
-/// of actual sweep lines, while trying not to add in two many subdivisions.
-pub fn weaks_to_events_sparse<F: Float, C: FnMut(F, Position<F>)>(
-    weaks: &[WeakSweepLinePair<F>],
-    segments: &Segments<F>,
-    eps: &F,
-    mut callback: C,
-) {
-    for line in weaks {
+/// Runs the sweep-line algorithm, calling the provided callback on every output point.
+pub fn sweep<F: Float, C: FnMut(F, Position<F>)>(segments: &Segments<F>, eps: &F, mut callback: C) {
+    let mut state = State::new(segments, eps.clone());
+    while let Some(line) = state.next_line() {
         for (start, end) in line.changed_intervals(segments, eps) {
             let mut positions = line.position_range((start, end), segments, eps);
             while let Some(events) = positions.next_events() {
@@ -1311,11 +1298,7 @@ mod tests {
 
         let segs = mk_segs(&[(0.0, 0.0), (1.0, 1.0), (-2.0, 2.0)]);
         dbg!(&segs);
-        let lines = sweep(&segs, &eps);
-        dbg!(&lines);
-        assert_eq!(4, lines.len());
-        //dbg!(&weaks_to_sweeps_dense(&lines, &segs, &eps));
-        weaks_to_events_sparse(&lines, &segs, &eps, |_, ev| {
+        sweep(&segs, &eps, |_, ev| {
             dbg!(ev);
         });
     }
@@ -1343,8 +1326,7 @@ mod tests {
             segs.add_points(poly, true);
         }
         let eps = P::Float::from_f32(0.1);
-        let weaks = sweep(&segs, &eps);
-        weaks_to_events_sparse(&weaks, &segs, &eps, |_, _| {});
+        sweep(&segs, &eps, |_, _| {});
     }
 
     proptest! {
