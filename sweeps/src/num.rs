@@ -1,8 +1,13 @@
+//! A thin abstraction over the different numerical types we support.
+
 use std::hash::Hash;
 
 use malachite::Rational;
 use ordered_float::NotNan;
 
+/// A trait for abstracting over the properties we need from numerical types.
+///
+/// This is implemented for `NotNan<f64>`, `NotNan<f32>`, and `malachite::Rational`.
 pub trait Float:
     Sized
     + std::ops::Add<Self, Output = Self>
@@ -25,12 +30,6 @@ pub trait Float:
 
     fn to_exact(&self) -> Rational;
 
-    // These next two exist only to support `Bounds`, because this is easier
-    // than adding `{add,sub,mul,div}_rounding_{up,down}`. Rational is allowed
-    // to have the identity function for both of these.
-    fn next_down(&self) -> Self;
-    fn next_up(&self) -> Self;
-
     fn abs(self) -> Self;
 }
 
@@ -40,14 +39,6 @@ impl Float for Rational {
     }
 
     fn to_exact(&self) -> Rational {
-        self.clone()
-    }
-
-    fn next_down(&self) -> Self {
-        self.clone()
-    }
-
-    fn next_up(&self) -> Self {
         self.clone()
     }
 
@@ -65,14 +56,6 @@ impl Float for NotNan<f32> {
         self.into_inner().try_into().unwrap()
     }
 
-    fn next_down(&self) -> Self {
-        self.into_inner().next_down().try_into().unwrap()
-    }
-
-    fn next_up(&self) -> Self {
-        self.into_inner().next_up().try_into().unwrap()
-    }
-
     fn abs(self) -> Self {
         self.into_inner().abs().try_into().unwrap()
     }
@@ -85,14 +68,6 @@ impl Float for NotNan<f64> {
 
     fn to_exact(&self) -> Rational {
         self.into_inner().try_into().unwrap()
-    }
-
-    fn next_down(&self) -> Self {
-        self.into_inner().next_down().try_into().unwrap()
-    }
-
-    fn next_up(&self) -> Self {
-        self.into_inner().next_up().try_into().unwrap()
     }
 
     fn abs(self) -> Self {

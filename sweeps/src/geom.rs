@@ -1,9 +1,14 @@
+//! Geometric primitives, like points and lines.
+
 use malachite::Rational;
 use ordered_float::NotNan;
 
 use crate::num::Float;
 
-// Points are sorted by `y` and then by `x`
+/// A two-dimensional point.
+///
+/// Points are sorted by `y` and then by `x`, for the convenience of our sweep-line
+/// algorithm (which moves in increasing `y`).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Point<F: Float> {
     pub y: F,
@@ -17,10 +22,16 @@ impl<F: Float> std::fmt::Debug for Point<F> {
 }
 
 impl<F: Float> Point<F> {
+    /// Create a new point.
+    ///
+    /// Note that the `x` coordinate comes first. This might be a tiny bit
+    /// confusing because we're sorting by `y` coordinate first, but `(x, y)` is
+    /// the only sane order (prove me wrong).
     pub fn new(x: F, y: F) -> Self {
         Point { x, y }
     }
 
+    /// Convert this point to an exact rational representation.
     pub fn to_exact(&self) -> Point<Rational> {
         Point {
             x: self.x.to_exact(),
@@ -28,7 +39,9 @@ impl<F: Float> Point<F> {
         }
     }
 
-    // Panics on nans. Should be fine as long as everything is finite.
+    /// Compute and affine combination between `self` and `other`; that is, `(1 - t) * self + t * other`.
+    ///
+    /// Panics if a NaN is encountered, which might happen if some input is infinite.
     pub fn affine(&self, other: &Self, t: &F) -> Self {
         let one = F::from_f32(1.0);
         Point {
@@ -53,30 +66,15 @@ impl From<(f64, f64)> for Point<NotNan<f64>> {
     }
 }
 
-impl<F: Float> std::ops::Sub for Point<F> {
-    type Output = Vector<F>;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Vector {
-            x: self.x - rhs.x,
-            y: self.y - rhs.y,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Vector<F: Float> {
-    pub x: F,
-    pub y: F,
-}
-
-// The start point of a line is always strictly less than its end point.
-// This is the right representation for most of the sweep-line operations,
-// but it's a little clunky for other things because we need to keep track of
-// the original orientation.
+/// A line segment, in sweep-line order.
+///
+/// This has a start point and an end point, and the start point must always
+/// be strictly less than the end point.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Segment<F: Float> {
+    /// The starting point of this segment, strictly less than `end`.
     pub start: Point<F>,
+    /// The ending point of this segment, strictly greater than `start`.
     pub end: Point<F>,
 }
 
@@ -90,6 +88,8 @@ impl<F: Float> Segment<F> {
     /// Our `x` coordinate at the given `y` coordinate.
     ///
     /// Horizontal segments will return their largest `x` coordinate.
+    ///
+    /// # Panics
     ///
     /// Panics if `y` is outside the `y` range of this segment.
     pub fn at_y(&self, y: &F) -> F {
@@ -129,37 +129,18 @@ impl<F: Float> Segment<F> {
         }
     }
 
-    pub fn intersection_y(&self, other: &Self) -> Option<F> {
-        let y0 = self.start.y.clone().max(other.start.y.clone());
-        let y1 = self.end.y.clone().min(other.end.y.clone());
-
-        assert!(y1 >= y0);
-
-        let dx0 = other.at_y(&y0) - self.at_y(&y0);
-        let dx1 = other.at_y(&y1) - self.at_y(&y1);
-        let denom = dx0.clone() - dx1;
-        if denom <= F::from_f32(0.0) {
-            return None;
-        }
-
-        let t = dx0 / denom;
-        if t.ge(&F::from_f32(0.0)) && t.le(&F::from_f32(1.0)) {
-            Some(y0.clone() + t * (y1 - y0))
-        } else {
-            None
-        }
-    }
-
     /// Checks if `self` crosses `other`, and returns a valid crossing height if so.
     ///
-    /// This is basically the same as `intersection_y` but it's a little more "special"
-    /// because it's tailored to the needs of our weak ordering algorithm. First of all,
-    /// this should only be called when `self` starts of "to the left" (with some wiggle
-    /// room allowed) of `other`. If we find (numerically, approximately) that `self`
-    /// starts to the right and ends more to the right, we'll return the smallest shared
+    /// The notion of "crossing" is special to our sweep-line purposes; it
+    /// isn't a generic line segment intersection. This should only be called
+    /// when `self` starts of "to the left" (with some wiggle room allowed) of
+    /// `other`. If we find (numerically, approximately) that `self` starts to
+    /// the right and ends more to the right, we'll return the smallest shared
     /// height as the intersection height.
     ///
-    /// This is guaranteed to find a crossing height if `self` ends at least `eps` to the right of `other`.
+    /// This is guaranteed to find a crossing height if `self` ends at least
+    /// `eps` to the right of `other`. If the ending horizontal positions are
+    /// very close, we might just declare that there's no crossing.
     pub fn crossing_y(&self, other: &Self, eps: &F) -> Option<F> {
         let y0 = self.start.y.clone().max(other.start.y.clone());
         let y1 = self.end.y.clone().min(other.end.y.clone());
@@ -193,6 +174,7 @@ impl<F: Float> Segment<F> {
         Some((y0.clone() + t * (y1.clone() - y0)).min(y1))
     }
 
+    /// Convert this segment to an exact segment using rational arithmetic.
     pub fn to_exact(&self) -> Segment<Rational> {
         Segment {
             start: self.start.to_exact(),
@@ -200,12 +182,18 @@ impl<F: Float> Segment<F> {
         }
     }
 
+    /// Returns true if this segment is exactly horizontal.
     pub fn is_horizontal(&self) -> bool {
         self.start.y == self.end.y
     }
 }
 
 impl Segment<Rational> {
+    /// The height of the (first) intersection between `self` and `other`.
+    ///
+    /// This differs from `crossing_y` in that it's exact, whereas `crossing_y`
+    /// (even when used with `Segment<Rational>`) has some slop near the
+    /// beginning and ending heights.
     pub fn exact_intersection_y(&self, other: &Self) -> Option<Rational> {
         let y0 = self.start.y.clone().max(other.start.y.clone());
         let y1 = self.end.y.clone().min(other.end.y.clone());
@@ -345,7 +333,8 @@ pub(crate) mod tests {
                 return Ok(());
             }
 
-            let y = s0.intersection_y(&s1).unwrap().to_exact();
+            let eps = NotNan::try_from(2e6f32 * (-19.0f32).exp2()).unwrap();
+            let y = s0.crossing_y(&s1, &eps).unwrap().to_exact();
             let x0 = t0.at_y(&y);
             let x1 = t1.at_y(&y);
             assert!((x0 - x1).abs() <= error_bound);
