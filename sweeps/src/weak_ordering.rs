@@ -753,7 +753,7 @@ impl<F: Float> SweepLine<'_, F> {
         range: (usize, usize),
         segments: &Segments<F>,
         eps: &F,
-    ) -> OutputEventIter<F> {
+    ) -> OutputEventBatcher<F> {
         let old_xs = self
             .old_line
             // TODO: decide whether to use (usize, usize) or std::ops::Range or something else
@@ -860,7 +860,7 @@ impl<F: Float> SweepLine<'_, F> {
         }
         positions.sort();
 
-        OutputEventIter {
+        OutputEventBatcher {
             positions: positions.into_iter(),
             last_x: None,
             active_horizontals: BTreeSet::new(),
@@ -937,28 +937,60 @@ impl<F: Float> HSeg<F> {
     }
 }
 
+/// The different ways in which a line segment can "interact" with a sweep-line.
+///
+/// In exact math, a non-horizontal line segment can interact with a sweep-line
+/// in exactly one way: by intersecting it at a point. When dealing with inexact
+/// math, intersections and re-orderings between line segments might force
+/// our sweep-line algorithm to perturb the line segment. In that case, even
+/// a non-horizontal line segment might enter and leave the sweep-line at two
+/// different points.
+///
+/// `OutputEventKind` is ordered by the smallest horizontal coordinate where
+/// it intersects the sweep-line (i.e. [`OutputEventKind::smaller_x`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OutputEventKind<F: Float> {
+    /// The line segment in question meets the sweep-line in exactly one point.
+    ///
+    /// That point might be the start or end of the line segment, or it could
+    /// be an intermediate point.
     Point {
+        /// The horizontal coordinate of the intersection.
         x: F,
+        /// Does this line segment extend "above" (i.e. smaller `y`) this sweep-line?
         connected_above: bool,
+        /// Does this line segment extend "below" (i.e. larger `y`) this sweep-line?
         connected_below: bool,
     },
-    /// The two points are in sweep-line order.
+    /// The line segment in question meets the sweep-line along a segment.
     ///
-    /// This doesn't necessarily mean that the first point (call it `x0`) is
-    /// smaller than the second (`x1`)! Instead, it means that when traversing
-    /// the segment in sweep-line order (i.e. in increasing `y`, and increasing
-    /// `x` if the segment is horizontal) then it visits `x0` before `x1`.
+    /// The two points, `x0` and `x1`, are in sweep-line order. This doesn't
+    /// necessarily mean that `x0` is smaller than `x1`! Instead, it means that
+    /// when traversing the segment in sweep-line order (i.e. in increasing `y`,
+    /// and increasing `x` if the segment is horizontal) then it visits `x0`
+    /// before `x1`.
     Horizontal {
+        /// The first horizontal coordinate on this sweep-line that we'd hit if
+        /// we were traversing the segment in sweep-line orientation.
         x0: F,
+        /// Does this line segment extend "above" (i.e. smaller `y`) this sweep-line?
+        ///
+        /// If so, it will extend up from `x0`, because that's what the "sweep-line order"
+        /// means.
         connected_above: bool,
+        /// The last horizontal coordinate on this sweep-line that we'd hit if
+        /// we were traversing the segment in sweep-line orientation.
         x1: F,
+        /// Does this line segment extend "below" (i.e. larger `y`) this sweep-line?
+        ///
+        /// If so, it will extend down from `x1`, because that's what the "sweep-line order"
+        /// means.
         connected_below: bool,
     },
 }
 
 impl<F: Float> OutputEventKind<F> {
+    /// The smallest `x` coordinate at which the line segment touches the sweep-line.
     pub fn smaller_x(&self) -> &F {
         match self {
             Self::Point { x, .. } => x,
@@ -966,6 +998,7 @@ impl<F: Float> OutputEventKind<F> {
         }
     }
 
+    /// The largest `x` coordinate at which the line segment touches the sweep-line.
     pub fn larger_x(&self) -> &F {
         match self {
             Self::Point { x, .. } => x,
@@ -973,7 +1006,7 @@ impl<F: Float> OutputEventKind<F> {
         }
     }
 
-    pub fn from_points(x0: F, connected_above: bool, x1: F, connected_below: bool) -> Self {
+    fn from_points(x0: F, connected_above: bool, x1: F, connected_below: bool) -> Self {
         if x0 == x1 {
             OutputEventKind::Point {
                 x: x0,
@@ -992,6 +1025,7 @@ impl<F: Float> OutputEventKind<F> {
         }
     }
 
+    /// Does the line segment extend up from the horizontal coordinate `x`?
     pub fn connected_above_at(&self, x: &F) -> bool {
         match self {
             OutputEventKind::Point {
@@ -1007,6 +1041,7 @@ impl<F: Float> OutputEventKind<F> {
         }
     }
 
+    /// Does the line segment extend down from the horizontal coordinate `x`?
     pub fn connected_below_at(&self, x: &F) -> bool {
         match self {
             OutputEventKind::Point {
@@ -1038,21 +1073,26 @@ impl<F: Float> PartialOrd for OutputEventKind<F> {
 }
 
 /// An `OutputEvent` records the interaction between a line segment and a sweep-line.
+///
+/// See [`OutputEventKind`] for more details. `OutputEvent` is ordered primarily
+/// by the smallest horizontal coordinate where it intersects the sweep-line
+/// (i.e. [`OutputEventKind::smaller_x`]).
 #[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub struct OutputEvent<F: Float> {
+    /// The kind of interaction.
     pub kind: OutputEventKind<F>,
     /// The segment that's interacting with the sweep line.
     pub seg_idx: SegIdx,
 }
 
 #[derive(Clone, Debug)]
-pub struct OutputEventIter<F: Float> {
+pub struct OutputEventBatcher<F: Float> {
     last_x: Option<F>,
     pub positions: std::vec::IntoIter<OutputEvent<F>>,
     pub active_horizontals: BTreeSet<HSeg<F>>,
 }
 
-impl<F: Float> OutputEventIter<F> {
+impl<F: Float> OutputEventBatcher<F> {
     pub fn next_x(&self) -> Option<F> {
         match (
             self.active_horizontals.first(),

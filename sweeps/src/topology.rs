@@ -4,7 +4,7 @@ use crate::{
     geom::Point,
     num::Float,
     segments::{SegIdx, Segments},
-    weak_ordering::{self, HSeg, OutputEventIter, SweepLine},
+    weak_ordering::{self, HSeg, OutputEventBatcher, SweepLine},
 };
 
 /// We support boolean operations, so a "winding number" for us is two winding
@@ -359,7 +359,7 @@ impl<F: Float> Topology<F> {
 
     fn update_from_positions(
         &mut self,
-        mut pos: OutputEventIter<F>,
+        mut pos: OutputEventBatcher<F>,
         segments: &Segments<F>,
         lines: SweepLine<'_, F>,
         range: (usize, usize),
