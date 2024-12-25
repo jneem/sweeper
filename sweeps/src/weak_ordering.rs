@@ -66,6 +66,30 @@ pub struct EventQueue<F: Float> {
 }
 
 impl<F: Float> EventQueue<F> {
+    /// Builds an event queue containing the starting and ending positions
+    /// of all the  segments.
+    ///
+    /// The returned event queue will not contain any intersection events.
+    pub fn from_segments(segments: &Segments<F>) -> Self {
+        // Non-horizontal segments take up two events, so allocate for twice the number of segments.
+        let mut inner = std::collections::BinaryHeap::with_capacity(segments.segs.len() * 2);
+
+        for seg in segments.indices() {
+            if segments.get(seg).is_horizontal() {
+                inner.push(std::cmp::Reverse(SweepEvent {
+                    y: segments.get(seg).start.y.clone(),
+                    kind: SweepEventKind::Horizontal(seg),
+                }));
+            } else {
+                let (a, b) = SweepEvent::from_segment(seg, segments);
+                inner.push(std::cmp::Reverse(a));
+                inner.push(std::cmp::Reverse(b));
+            }
+        }
+
+        Self { inner }
+    }
+
     pub fn push(&mut self, ev: SweepEvent<F>) {
         self.inner.push(std::cmp::Reverse(ev));
     }
@@ -805,24 +829,7 @@ fn merge_adjacent(intervals: impl IntoIterator<Item = (usize, usize)>) -> Vec<(u
 /// Runs a sweep over all the segments, returning a sweep line at every `y` where
 /// there was an event.
 pub fn sweep<F: Float>(segments: &Segments<F>, eps: &F) -> Vec<WeakSweepLinePair<F>> {
-    let events = EventQueue {
-        inner: segments
-            .indices()
-            .flat_map(|idx| {
-                if segments.get(idx).is_horizontal() {
-                    vec![SweepEvent {
-                        y: segments.get(idx).start.y.clone(),
-                        kind: SweepEventKind::Horizontal(idx),
-                    }]
-                } else {
-                    let (a, b) = SweepEvent::from_segment(idx, segments);
-                    vec![a, b]
-                }
-            })
-            .map(std::cmp::Reverse)
-            .collect(),
-    };
-
+    let events = EventQueue::from_segments(segments);
     let line = WeakSweepLine::new(events.next_y().unwrap().clone());
 
     let mut state = State {
