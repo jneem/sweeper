@@ -8,8 +8,7 @@ use crate::{
 ///
 /// This index is used to identify a segment, whose data can be retrieved by looking
 /// it up in [`Segments`]. (Of course, this index-as-identifier breaks down if there are
-/// multiple `Segments` in flight. Maybe `SegRef<'a>(pub &'a SegData)` would be a better
-/// representation. But it makes us carry lifetimes around...
+/// multiple `Segments` in flight. Just be careful not to mix them up.)
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SegIdx(pub usize);
 
@@ -19,20 +18,23 @@ impl std::fmt::Debug for SegIdx {
     }
 }
 
+/// A sweep line event.
+///
+/// These are placed in an `EventQueue` and sorted by height, so that the
+/// sweep-line algorithm processes them in increasing order.
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub struct SweepEvent<F: Float> {
+    /// The height at which this event takes place.
     pub y: F,
+    /// The event's data.
     pub kind: SweepEventKind,
 }
 
-#[derive(Debug)]
-pub struct Intersection<F: Float> {
-    pub y: F,
-    pub i: SegIdx,
-    pub j: SegIdx,
-}
-
 impl<F: Float> SweepEvent<F> {
+    /// Create an intersection event.
+    ///
+    /// `left` should be (approximately) to the left of `right` before height `y`,
+    /// and then after height `y` they should be swapped.
     pub fn intersection(left: SegIdx, right: SegIdx, y: F) -> Self {
         SweepEvent {
             y,
@@ -40,6 +42,7 @@ impl<F: Float> SweepEvent<F> {
         }
     }
 
+    /// Create an enter and an exit event for a line segment (which should be non-horizontal).
     pub fn from_segment(i: SegIdx, arena: &Segments<F>) -> (Self, Self) {
         let s = arena.get(i);
         (
@@ -162,11 +165,28 @@ impl<F: Float> Segments<F> {
     }
 }
 
+/// The different kinds of sweep line events.
+///
+/// These are sorted in the order that our sweep-line algorithm needs to process them.
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub enum SweepEventKind {
+    /// A segment is entering the sweep line (i.e. the sweep line's `y` is the same as the segment's starting `y`).
+    ///
+    /// This event is only used for non-horizontal segments.
     Enter(SegIdx),
+    /// A horizontal segment is entering the sweep line (i.e. both its starting and ending `y`s are on the sweep line).
     Horizontal(SegIdx),
-    Intersection { left: SegIdx, right: SegIdx },
+    /// Two segments intersect at the sweep line.
+    Intersection {
+        /// This segment used to be to the left, and after the intersection it will be to the right.
+        ///
+        /// In our sweep line intersection, this segment might have already been moved to the right by
+        /// some other constraints. That's ok.
+        left: SegIdx,
+        /// This segment used to be to the right, and after the intersection it will be to the left.
+        right: SegIdx,
+    },
+    /// A segment is exiting the sweep line (i.e. the sweep line's `y` is the same as the segment's ending `y`).
     Exit(SegIdx),
 }
 
@@ -186,119 +206,5 @@ impl std::fmt::Debug for SweepEventKind {
                 write!(f, "horizontal({seg:?})")
             }
         }
-    }
-}
-
-/// An inefficient but flexible representation of a single sweep-line.
-#[derive(Clone, Debug)]
-pub struct SweepLine<F: Float> {
-    /// The vertical coordinate of this sweep line.
-    pub y: F,
-    /// All segments present in the sweep line, sorted by their first horizontal position.
-    ///
-    /// Must be non-empty.
-    pub segs: Vec<SweepLineEntry<F>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SweepLineEntry<F: Float> {
-    pub x: SweepLineSeg<F>,
-    pub idx: SegIdx,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SweepLineSeg<F: Float> {
-    Single(F),
-    // FIXME: what is the meaning of the order here? I think it's with respect to the y ordering
-    // and not the original orientation. That is, the enter coordinate is the one that
-    // should be connected to the sweep line with smaller y, and the exit coordinate should
-    // be connected to the sweep line with larger y.
-    EnterExit(F, F),
-}
-
-impl<F: Float> PartialOrd for SweepLineSeg<F> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<F: Float> Ord for SweepLineSeg<F> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.smaller_x()
-            .cmp(other.smaller_x())
-            .then_with(|| self.larger_x().cmp(other.larger_x()))
-    }
-}
-
-impl<F: Float> SweepLine<F> {
-    pub fn check_invariants(&self) {
-        assert!(is_sorted(self.segs.iter().map(|entry| match &entry.x {
-            SweepLineSeg::Single(x) | SweepLineSeg::EnterExit(x, _) => x,
-        })));
-    }
-}
-
-impl<F: Float> SweepLineSeg<F> {
-    /// I couldn't think of a good name for this, but if `b` is true it returns the entering
-    /// `x` coordinate and otherwise returns the exiting `x` coordinate.
-    ///
-    /// If you take `b` to be whether the line segment is positively oriented, this method returns
-    /// the horizontal position of the point that gets visited first when walking the contour.
-    pub fn enter(&self, b: bool) -> &F {
-        match self {
-            SweepLineSeg::Single(x) => x,
-            SweepLineSeg::EnterExit(x, y) => {
-                if b {
-                    x
-                } else {
-                    y
-                }
-            }
-        }
-    }
-
-    pub fn smaller_x(&self) -> &F {
-        match self {
-            SweepLineSeg::Single(x) => x,
-            SweepLineSeg::EnterExit(x, y) => x.min(y),
-        }
-    }
-
-    pub fn larger_x(&self) -> &F {
-        match self {
-            SweepLineSeg::Single(x) => x,
-            SweepLineSeg::EnterExit(x, y) => x.max(y),
-        }
-    }
-}
-
-fn is_sorted<T: PartialOrd, I: Iterator<Item = T>>(mut it: I) -> bool {
-    let Some(mut prev) = it.next() else {
-        return true;
-    };
-
-    for cur in it {
-        if prev > cur {
-            return false;
-        }
-        prev = cur;
-    }
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn is_sorted() {
-        use super::is_sorted;
-
-        assert!(is_sorted([0, 1, 1, 5].iter()));
-        assert!(is_sorted([0].iter()));
-        assert!(is_sorted(Vec::<u32>::new().iter()));
-
-        assert!(!is_sorted([0, 1, 0, 5].iter()));
-        assert!(!is_sorted([1, 0, 0, 5].iter()));
-        assert!(!is_sorted([1, 1, 1, 0].iter()));
-        assert!(!is_sorted([1, 0].iter()));
     }
 }
