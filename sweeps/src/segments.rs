@@ -3,6 +3,8 @@ use crate::{
     num::Float,
 };
 
+/// An index into our segment arena.
+///
 /// Throughout this library, we assign identities to segments, so that we may
 /// consider segments as different even if they have the same start- and end-points.
 ///

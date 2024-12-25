@@ -4,7 +4,7 @@ use crate::{
     geom::Point,
     num::Float,
     segments::{SegIdx, Segments},
-    weak_ordering::{self, HSeg, OutputEventBatcher, SweepLine},
+    weak_ordering::{self, OutputEventBatcher, SweepLine},
 };
 
 /// We support boolean operations, so a "winding number" for us is two winding
@@ -339,10 +339,10 @@ impl<F: Float> Topology<F> {
 
     pub fn build(segments: &Segments<F>, eps: &F) -> Self {
         let mut ret = Self::from_segments(segments);
-        let mut sweep_state = weak_ordering::State::new(segments, eps.clone());
+        let mut sweep_state = weak_ordering::Sweeper::new(segments, eps.clone());
         while let Some(line) = sweep_state.next_line() {
             for (start, end) in line.changed_intervals(segments, eps) {
-                let positions = line.position_range((start, end), segments, eps);
+                let positions = line.events_in_range((start, end), segments, eps);
                 let scan_left_seg = if start == 0 {
                     None
                 } else {
@@ -370,7 +370,7 @@ impl<F: Float> Topology<F> {
             .map(|idx| self.winding[idx].counter_clockwise)
             .unwrap_or_default();
         let (old_order, new_order) = lines.range_orders(range);
-        while let Some(next_x) = pos.next_x() {
+        while let Some(next_x) = pos.x() {
             let p = Point::new(next_x.clone(), y.clone());
             // The first segment at our current point, in clockwise order.
             let mut first_seg = None;
@@ -378,7 +378,7 @@ impl<F: Float> Topology<F> {
             let mut last_seg = None;
 
             // Close off the horizontal segments from the previous point in this sweep-line.
-            let mut hsegs: Vec<_> = pos.active_horizontals.iter().map(|hseg| hseg.seg).collect();
+            let mut hsegs: Vec<_> = pos.active_horizontals().collect();
             hsegs.sort_by_key(|s| new_order[s]);
             let hsegs: Vec<_> = self.second_half_segs(hsegs.into_iter()).collect();
             self.add_segs_clockwise(&mut first_seg, &mut last_seg, hsegs.into_iter(), &p);
@@ -386,19 +386,7 @@ impl<F: Float> Topology<F> {
             // Find all the segments that are connected to something above this sweep-line at next_x.
             // This is (a) all the horizontal segments terminating here, plus (b) the single-point
             // positions in our position iterator.
-            let mut segments_connected_up: Vec<_> = pos
-                .active_horizontals
-                .iter()
-                .filter(|hseg| hseg.connected_above_at(&next_x))
-                .map(|hseg| hseg.seg)
-                .collect();
-            if let Some(positions) = pos.positions_at_current_x() {
-                segments_connected_up.extend(
-                    positions
-                        .filter(|pos| pos.kind.connected_above_at(&next_x))
-                        .map(|pos| pos.seg_idx),
-                );
-            }
+            let mut segments_connected_up: Vec<_> = pos.segments_connected_up().collect();
 
             // Sorting the connected-up segments by the old sweep-line's order means that they'll
             // be in clockwise order when seen from the current point.
@@ -412,20 +400,9 @@ impl<F: Float> Topology<F> {
             // Then: gather the output segments from half-segments starting here and moving
             // to later sweep-lines. Sort them and allocate new output segments for them.
             // Also, calculate their winding numbers and update `winding`.
-            let mut segments_connected_down: Vec<_> = pos
-                .active_horizontals
-                .iter()
-                .filter(|hseg| hseg.connected_below_at(&next_x))
-                .map(|hseg| hseg.seg)
-                .collect();
-            if let Some(positions) = pos.positions_at_current_x() {
-                segments_connected_down.extend(
-                    positions
-                        .filter(|pos| pos.kind.connected_below_at(&next_x))
-                        .map(|pos| pos.seg_idx),
-                );
-            }
+            let mut segments_connected_down: Vec<_> = pos.segments_connected_down().collect();
             segments_connected_down.sort_by_key(|s| new_order[s]);
+
             let mut new_out_segs = Vec::new();
             for new_seg in segments_connected_down {
                 let winding_dir = if segments.positively_oriented(new_seg) {
@@ -455,27 +432,13 @@ impl<F: Float> Topology<F> {
                 &p,
             );
 
-            // Update the active horizontal segments, getting rid of ones ending here and
-            // inserting new ones.
-            pos.drain_active_horizontals(&next_x);
-            while let Some(p) = pos.positions.as_slice().first() {
-                if p.kind.smaller_x() > &next_x {
-                    break;
-                }
-                // unwrap: we just peeked at this element.
-                let p = pos.positions.next().unwrap();
-
-                if let Some(hseg) = HSeg::from_position(p) {
-                    // For horizontal segments, we don't output anything straight
-                    // away. When we update the horizontal position and visit our
-                    // horizontal segments, we'll output something.
-                    pos.active_horizontals.insert(hseg);
-                }
-            }
+            // Bump the current x position, which will get rid of horizontals ending here
+            // and add any horizontals starting here.
+            pos.increase_x();
 
             // Finally, gather the output segments from horizontal segments starting here.
             // Allocate new output segments for them and calculate their winding numbers.
-            let mut hsegs: Vec<_> = pos.active_horizontals.iter().map(|hseg| hseg.seg).collect();
+            let mut hsegs: Vec<_> = pos.active_horizontals().collect();
             hsegs.sort_by_key(|s| new_order[s]);
 
             // We don't want to update our "global" winding number state because that's supposed

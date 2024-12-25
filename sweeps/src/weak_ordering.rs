@@ -105,23 +105,23 @@ impl<F: Float> EventQueue<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct State<F: Float> {
-    pub y: F,
-    pub eps: F,
-    pub line: SegmentOrder,
-    pub old_line: SegmentOrder,
-    pub events: EventQueue<F>,
+pub struct Sweeper<F: Float> {
+    pub(crate) y: F,
+    pub(crate) eps: F,
+    pub(crate) line: SegmentOrder,
+    pub(crate) old_line: SegmentOrder,
+    pub(crate) events: EventQueue<F>,
     // TODO: maybe borrow Segments?
-    pub segments: Segments<F>,
+    pub(crate) segments: Segments<F>,
 
-    // For the sparse realization, this is the collection of segments that
-    // we know need to be given explicit positions in the current sweep line.
+    // The collection of segments that we know need to be given explicit
+    // positions in the current sweep line.
     //
     // These include:
     // - any segments that changed order with any other segments
     // - any segments that entered or exited
     // - any segments that are between the endpoints of contour-adjacent segments.
-    pub segs_needing_positions: HashSet<SegIdx>,
+    pub(crate) segs_needing_positions: HashSet<SegIdx>,
     // Segments marked as having exited the sweep-line. We don't remove them
     // immediately because that shifts indices around and makes it harder to
     // compare old vs. new sweep-lines. Instead, we remember that we're supposed
@@ -129,15 +129,15 @@ pub struct State<F: Float> {
     //
     // This could potentially be part of the `segs` list instead of as a separate
     // map.
-    pub exits: HashSet<SegIdx>,
-    pub entrances: HashSet<SegIdx>,
+    pub(crate) exits: HashSet<SegIdx>,
+    pub(crate) entrances: HashSet<SegIdx>,
 }
 
-impl<F: Float> State<F> {
+impl<F: Float> Sweeper<F> {
     pub fn new(segments: &Segments<F>, eps: F) -> Self {
         let events = EventQueue::from_segments(segments);
 
-        State {
+        Sweeper {
             eps,
             old_line: SegmentOrder::default(),
             line: SegmentOrder::default(),
@@ -210,14 +210,14 @@ impl<F: Float> State<F> {
         self.exits.clear();
     }
 
-    pub fn advance(&mut self, y: F) {
+    fn advance(&mut self, y: F) {
         self.process_exits();
         self.y = y;
         self.segs_needing_positions.clear();
         self.entrances.clear();
     }
 
-    pub fn intersection_scan_right(&mut self, start_idx: usize) {
+    fn intersection_scan_right(&mut self, start_idx: usize) {
         let seg = self.segments.get(self.line.segs[start_idx]);
         let y = &self.y;
 
@@ -255,7 +255,7 @@ impl<F: Float> State<F> {
         }
     }
 
-    pub fn intersection_scan_left(&mut self, start_idx: usize) {
+    fn intersection_scan_left(&mut self, start_idx: usize) {
         let seg = self.segments.get(self.line.segs[start_idx]);
         let y = &self.y;
 
@@ -302,7 +302,8 @@ impl<F: Float> State<F> {
         self.intersection_scan_left(pos);
     }
 
-    pub fn step(&mut self) {
+    /// Consume a single event from the event queue and process it.
+    fn step(&mut self) {
         let Some(ev) = self.events.pop() else {
             return;
         };
@@ -385,7 +386,7 @@ impl<F: Float> State<F> {
         }
     }
 
-    pub fn check_invariants(&self) {
+    fn check_invariants(&self) {
         for ev in &self.events.inner {
             assert!(
                 ev.0.y >= self.y,
@@ -669,22 +670,28 @@ impl SegmentOrder {
 #[derive(Clone, Debug)]
 pub struct SweepLine<'a, F: Float> {
     pub y: &'a F,
-    pub old_line: &'a SegmentOrder,
-    pub new_line: &'a SegmentOrder,
+    pub(crate) old_line: &'a SegmentOrder,
+    pub(crate) new_line: &'a SegmentOrder,
 
-    pub segs_needing_positions: &'a HashSet<SegIdx>,
-    pub exits: &'a HashSet<SegIdx>,
-    pub entrances: &'a HashSet<SegIdx>,
+    pub(crate) segs_needing_positions: &'a HashSet<SegIdx>,
+    pub(crate) exits: &'a HashSet<SegIdx>,
+    pub(crate) entrances: &'a HashSet<SegIdx>,
 }
 
 impl<F: Float> Copy for SweepLine<'_, F> {}
 
 impl<F: Float> SweepLine<'_, F> {
-    /// We've marked various segments that need to be given an explicit
-    /// horizontal position in the new sweep line, but in order to do that we
-    /// may need to consider the positions of other nearby segments. In this
-    /// method we explore nearby segments, turning our list of segments needing
-    /// positions into a disjoint list of intervals needing positions.
+    /// Returns the index ranges of segments in this sweep-line that need to be
+    /// given explicit positions.
+    ///
+    /// Not every line segment that passes through a sweep-line needs to be
+    /// subdivided at that sweep-line; in order to have a fast sweep-line
+    /// implementation, we need to be able to ignore the segments that don't
+    /// need subdivision.
+    ///
+    /// This method returns a list of ranges (in increasing order, non-overlapping,
+    /// and non-adjacent). Each of those ranges indexes a range of segments
+    /// that need to be subdivided at the current sweep-line.
     pub fn changed_intervals(&self, segments: &Segments<F>, eps: &F) -> Vec<(usize, usize)> {
         let mut changed: BTreeSet<_> = self.segs_needing_positions.iter().cloned().collect();
         let mut ret = Vec::new();
@@ -738,6 +745,16 @@ impl<F: Float> SweepLine<'_, F> {
         merge_adjacent(ret)
     }
 
+    /// Given a range of segments at this sweep line (see [`SweepLine::changed_intervals`]),
+    /// returns maps for looking up segment orders.
+    ///
+    /// The first map corresponds to the old order at this height; the second map corresponds
+    /// to the new order. If the range came from `SweepLine::changed_intervals`, both maps will
+    /// have the same set of keys. The values in the maps are the positions of the segments in
+    /// the sweep line.
+    ///
+    /// For example, if you ask for the range `4..7` and the old sweep line has segments `s42`,
+    /// `s1`, `s77` in those positions then you'll get back the map `{ s42 -> 4, s1 -> 5, s77 -> 6 }`.
     pub fn range_orders(
         &self,
         range: (usize, usize),
@@ -748,7 +765,11 @@ impl<F: Float> SweepLine<'_, F> {
         )
     }
 
-    pub fn position_range(
+    /// Returns an [`OutputEventBatcher`] for visiting and processing all positions within
+    /// a range of segments.
+    ///
+    /// The range must have come from [`SweepLine::changed_intervals`].
+    pub fn events_in_range(
         &self,
         range: (usize, usize),
         segments: &Segments<F>,
@@ -890,7 +911,7 @@ fn merge_adjacent(intervals: impl IntoIterator<Item = (usize, usize)>) -> Vec<(u
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HSeg<F: Float> {
+struct HSeg<F: Float> {
     pub end: F,
     pub connected_at_start: bool,
     pub connected_at_end: bool,
@@ -1072,7 +1093,7 @@ impl<F: Float> PartialOrd for OutputEventKind<F> {
     }
 }
 
-/// An `OutputEvent` records the interaction between a line segment and a sweep-line.
+/// Describes the interaction between a line segment and a sweep-line.
 ///
 /// See [`OutputEventKind`] for more details. `OutputEvent` is ordered primarily
 /// by the smallest horizontal coordinate where it intersects the sweep-line
@@ -1085,40 +1106,104 @@ pub struct OutputEvent<F: Float> {
     pub seg_idx: SegIdx,
 }
 
+/// Emits output events for a single sub-range of a single sweep-line.
+///
+/// This is constructed using [`SweepLine::events_in_range`]. By repeatedly
+/// calling `OutputEventBatcher::increase_x` you can iterate over all
+/// interesting horizontal positions, left to right (i.e. smaller `x` to larger
+/// `x`).
 #[derive(Clone, Debug)]
 pub struct OutputEventBatcher<F: Float> {
     last_x: Option<F>,
-    pub positions: std::vec::IntoIter<OutputEvent<F>>,
-    pub active_horizontals: BTreeSet<HSeg<F>>,
+    positions: std::vec::IntoIter<OutputEvent<F>>,
+    active_horizontals: BTreeSet<HSeg<F>>,
 }
 
 impl<F: Float> OutputEventBatcher<F> {
-    pub fn next_x(&self) -> Option<F> {
+    /// The current horizontal position, or `None` if we're finished.
+    pub fn x(&self) -> Option<&F> {
         match (
             self.active_horizontals.first(),
             self.positions.as_slice().first(),
         ) {
             (None, None) => None,
-            (None, Some(pos)) => Some(pos.kind.smaller_x().clone()),
-            (Some(h), None) => Some(h.end.clone()),
-            (Some(h), Some(pos)) => Some(h.end.clone().min(pos.kind.smaller_x().clone())),
+            (None, Some(pos)) => Some(pos.kind.smaller_x()),
+            (Some(h), None) => Some(&h.end),
+            (Some(h), Some(pos)) => Some((&h.end).min(pos.kind.smaller_x())),
         }
     }
 
-    pub fn positions_at_current_x(&self) -> Option<impl Iterator<Item = &OutputEvent<F>>> {
-        let x = self.next_x()?;
-        Some(
-            self.positions
-                .as_slice()
-                .iter()
-                .take_while(move |p| p.kind.smaller_x() == &x),
-        )
+    fn positions_at_x<'a, 'b: 'a>(
+        &'b self,
+        x: &'a F,
+    ) -> impl Iterator<Item = &'b OutputEvent<F>> + 'a {
+        self.positions
+            .as_slice()
+            .iter()
+            .take_while(move |p| p.kind.smaller_x() == x)
     }
 
-    // TODO: instead of collecting the output events, we could return something referencing self
-    // that allows iteration
-    pub fn next_events(&mut self) -> Option<Vec<OutputEvent<F>>> {
-        let next_x = self.next_x()?;
+    /// Iterates over all segments at the current position that are connected to
+    /// something "above" (i.e. with smaller `y` than) the current sweep line.
+    pub fn segments_connected_up(&self) -> impl Iterator<Item = SegIdx> + '_ {
+        let maybe_iter = self.x().map(|x| {
+            let horiz = self
+                .active_horizontals
+                .iter()
+                .filter(|hseg| hseg.connected_above_at(x))
+                .map(|hseg| hseg.seg);
+
+            let posns = self
+                .positions_at_x(x)
+                .filter(move |pos| pos.kind.connected_above_at(x))
+                .map(|pos| pos.seg_idx);
+
+            horiz.chain(posns)
+        });
+
+        maybe_iter.into_iter().flatten()
+    }
+
+    /// Iterates over all segments at the current position that are connected to
+    /// something "below" (i.e. with larger `y` than) the current sweep line.
+    pub fn segments_connected_down(&self) -> impl Iterator<Item = SegIdx> + '_ {
+        let maybe_iter = self.x().map(|x| {
+            let horiz = self
+                .active_horizontals
+                .iter()
+                .filter(|hseg| hseg.connected_below_at(x))
+                .map(|hseg| hseg.seg);
+
+            let posns = self
+                .positions_at_x(x)
+                .filter(move |pos| pos.kind.connected_below_at(x))
+                .map(|pos| pos.seg_idx);
+
+            horiz.chain(posns)
+        });
+
+        maybe_iter.into_iter().flatten()
+    }
+
+    /// Iterates over the horizontal segments that are active at the current position.
+    ///
+    /// This includes the segments that end here, but does not include the ones
+    /// that start here.
+    pub fn active_horizontals(&self) -> impl Iterator<Item = SegIdx> + '_ {
+        self.active_horizontals.iter().map(|hseg| hseg.seg)
+    }
+
+    /// Returns the collection of all output events that end at the current
+    /// position, or `None` if this batcher is finished.
+    ///
+    /// If this returns `None`, this batcher is finished.
+    ///
+    /// All the returned events start at the previous `x` position and end
+    /// at the current `x` position. In particular, if you alternate between
+    /// calling [`OutputEventBatcher::increase_x`] and this method, you'll
+    /// receive non-overlapping batches of output events.
+    pub fn events(&mut self) -> Option<Vec<OutputEvent<F>>> {
+        let next_x = self.x()?.clone();
 
         let mut ret = Vec::new();
         for h in &self.active_horizontals {
@@ -1172,7 +1257,26 @@ impl<F: Float> OutputEventBatcher<F> {
         Some(ret)
     }
 
-    pub fn drain_active_horizontals(&mut self, x: &F) {
+    /// Move along to the next horizontal position.
+    pub fn increase_x(&mut self) {
+        if let Some(x) = self.x().cloned() {
+            self.drain_active_horizontals(&x);
+
+            while let Some(p) = self.positions.as_slice().first() {
+                if p.kind.smaller_x() > &x {
+                    break;
+                }
+                // unwrap: we just peeked at this element.
+                let p = self.positions.next().unwrap();
+
+                if let Some(hseg) = HSeg::from_position(p) {
+                    self.active_horizontals.insert(hseg);
+                }
+            }
+        }
+    }
+
+    fn drain_active_horizontals(&mut self, x: &F) {
         while let Some(h) = self.active_horizontals.first() {
             if h.end <= *x {
                 self.active_horizontals.pop_first();
@@ -1189,11 +1293,11 @@ pub fn sweep<F: Float, C: FnMut(F, OutputEvent<F>)>(
     eps: &F,
     mut callback: C,
 ) {
-    let mut state = State::new(segments, eps.clone());
+    let mut state = Sweeper::new(segments, eps.clone());
     while let Some(line) = state.next_line() {
         for (start, end) in line.changed_intervals(segments, eps) {
-            let mut positions = line.position_range((start, end), segments, eps);
-            while let Some(events) = positions.next_events() {
+            let mut positions = line.events_in_range((start, end), segments, eps);
+            while let Some(events) = positions.events() {
                 for ev in events {
                     callback(line.y.clone(), ev);
                 }
