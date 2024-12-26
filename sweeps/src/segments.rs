@@ -19,15 +19,18 @@ impl std::fmt::Debug for SegIdx {
         write!(f, "s_{}", self.0)
     }
 }
+
+/// An arena of line segments.
+///
+/// Segments are indexed by [`SegIdx`] and can be retrieved by indexing (i.e. with square brackets).
 #[derive(Debug, Clone)]
 pub struct Segments<F: Float> {
-    // TODO: make fields private; provide accessors and constructors
-    pub segs: Vec<Segment<F>>,
-    pub contour_prev: Vec<Option<SegIdx>>,
-    pub contour_next: Vec<Option<SegIdx>>,
+    segs: Vec<Segment<F>>,
+    contour_prev: Vec<Option<SegIdx>>,
+    contour_next: Vec<Option<SegIdx>>,
     /// For each segment, stores true if the sweep-line order (small y to big y)
     /// is the same as the orientation in its original contour.
-    pub orientation: Vec<bool>,
+    orientation: Vec<bool>,
 }
 
 impl<F: Float> Default for Segments<F> {
@@ -42,45 +45,114 @@ impl<F: Float> Default for Segments<F> {
 }
 
 fn cyclic_pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
-    xs.windows(2)
-        .map(|pair| (&pair[0], &pair[1]))
-        .chain(xs.last().zip(xs.first()))
+    pairs(xs).chain(xs.last().zip(xs.first()))
+}
+
+fn pairs<T>(xs: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    xs.windows(2).map(|pair| (&pair[0], &pair[1]))
 }
 
 impl<F: Float> Segments<F> {
-    pub fn get(&self, idx: SegIdx) -> &Segment<F> {
-        &self.segs[idx.0]
+    /// The number of line segments in this arena.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.segs.len()
     }
 
+    /// Iterate over all indices that can be used to index into this arena.
     pub fn indices(&self) -> impl Iterator<Item = SegIdx> {
         (0..self.segs.len()).map(SegIdx)
     }
 
+    /// Iterate over all segments in this arena.
     pub fn segments(&self) -> impl Iterator<Item = &Segment<F>> {
         self.segs.iter()
     }
 
+    /// Returns the starting point of the segment at `idx`, relative to the segment's original orientation.
+    ///
+    /// The start and end points of the segment itself are stored in sweep-line
+    /// order (i.e. `start` has the smaller `y` coordinate), regardless of the
+    /// original orientation of the segment. Use this method to retrieve the
+    /// segment's original start point.
     pub fn oriented_start(&self, idx: SegIdx) -> &Point<F> {
         if self.orientation[idx.0] {
-            &self.get(idx).start
+            &self[idx].start
         } else {
-            &self.get(idx).end
+            &self[idx].end
         }
     }
 
+    /// Returns the ending point of the segment at `idx`, relative to the segment's original orientation.
+    ///
+    /// The start and end points of the segment itself are stored in sweep-line
+    /// order (i.e. `start` has the smaller `y` coordinate), regardless of the
+    /// original orientation of the segment. Use this method to retrieve the
+    /// segment's original end point.
     pub fn oriented_end(&self, idx: SegIdx) -> &Point<F> {
         if self.orientation[idx.0] {
-            &self.get(idx).end
+            &self[idx].end
         } else {
-            &self.get(idx).start
+            &self[idx].start
         }
     }
 
+    /// Returns the index of the segment following `idx`.
+    ///
+    /// If `idx` is part of a non-closed polyline and it is the last segment,
+    /// this returns `None`. If `idx` is part of a closed polyline, this will
+    /// always return `Some`, and you might need to be careful to avoid looping
+    /// infinitely.
+    pub fn contour_next(&self, idx: SegIdx) -> Option<SegIdx> {
+        self.contour_next[idx.0]
+    }
+
+    /// Returns the index of the segment preceding `idx`.
+    ///
+    /// If `idx` is part of a non-closed polyline and it is the first segment,
+    /// this returns `None`. If `idx` is part of a closed polyline, this will
+    /// always return `Some`, and you might need to be careful to avoid looping
+    /// infinitely.
+    pub fn contour_prev(&self, idx: SegIdx) -> Option<SegIdx> {
+        self.contour_prev[idx.0]
+    }
+
+    /// Does the sweep-line orientation of `idx` agree with its original orientation?
     pub fn positively_oriented(&self, idx: SegIdx) -> bool {
         self.orientation[idx.0]
     }
 
-    pub fn add_points<P: Into<Point<F>>>(&mut self, ps: impl IntoIterator<Item = P>, closed: bool) {
+    /// Add a (non-closed) polyline to this arena.
+    pub fn add_points<P: Into<Point<F>>>(&mut self, ps: impl IntoIterator<Item = P>) {
+        let old_len = self.segs.len();
+
+        let ps: Vec<_> = ps.into_iter().map(|p| p.into()).collect();
+        if ps.len() <= 1 {
+            return;
+        }
+
+        for (p, q) in pairs(&ps) {
+            let (a, b, orient) = if p < q { (p, q, true) } else { (q, p, false) };
+            self.segs.push(Segment {
+                start: a.clone(),
+                end: b.clone(),
+            });
+            self.orientation.push(orient);
+            self.contour_prev
+                .push(Some(SegIdx(self.segs.len().saturating_sub(2))));
+            self.contour_next.push(Some(SegIdx(self.segs.len())));
+        }
+
+        if let Some(first) = self.contour_prev.get_mut(old_len) {
+            *first = None;
+        }
+        if let Some(last) = self.contour_next.last_mut() {
+            *last = None;
+        }
+    }
+
+    /// Add a closed polyline to this arena.
+    pub fn add_cycle<P: Into<Point<F>>>(&mut self, ps: impl IntoIterator<Item = P>) {
         let old_len = self.segs.len();
 
         let ps: Vec<_> = ps.into_iter().map(|p| p.into()).collect();
@@ -99,23 +171,27 @@ impl<F: Float> Segments<F> {
                 .push(Some(SegIdx(self.segs.len().saturating_sub(2))));
             self.contour_next.push(Some(SegIdx(self.segs.len())));
         }
-        if closed {
-            self.contour_prev[old_len] = Some(SegIdx(self.segs.len() - 1));
-            *self.contour_next.last_mut().unwrap() = Some(SegIdx(old_len));
-        } else {
-            // Yuck
-            self.segs.pop();
-            self.orientation.pop();
-            self.contour_prev.pop();
-            self.contour_next.pop();
-            self.contour_prev[old_len] = None;
-            *self.contour_next.last_mut().unwrap() = None;
+
+        if let Some(first) = self.contour_prev.get_mut(old_len) {
+            *first = Some(SegIdx(self.segs.len() - 1));
+        }
+        if let Some(last) = self.contour_next.last_mut() {
+            *last = Some(SegIdx(old_len));
         }
     }
 
+    /// Construct a segment arena from a single closed polyline.
     pub fn from_closed_cycle<P: Into<Point<F>>>(ps: impl IntoIterator<Item = P>) -> Self {
         let mut ret = Self::default();
-        ret.add_points(ps, true);
+        ret.add_cycle(ps);
         ret
+    }
+}
+
+impl<F: Float> std::ops::Index<SegIdx> for Segments<F> {
+    type Output = Segment<F>;
+
+    fn index(&self, index: SegIdx) -> &Self::Output {
+        &self.segs[index.0]
     }
 }

@@ -26,10 +26,13 @@ pub trait Float:
     + Hash
     + 'static
 {
+    /// Convert from a `f32`. This is allowed to panic if `x` is infinite or NaN.
     fn from_f32(x: f32) -> Self;
 
+    /// Convert this number to a rational, for exact computation.
     fn to_exact(&self) -> Rational;
 
+    /// The absolute value.
     fn abs(self) -> Self;
 }
 

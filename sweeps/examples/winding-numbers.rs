@@ -47,7 +47,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     let mut points = Vec::<Point<Float>>::new();
                     kurbo::flatten(kurbo_els, DEFAULT_ACCURACY, |el| match el {
                         kurbo::PathEl::MoveTo(p) => {
-                            ret.add_points(points.drain(..), false);
+                            ret.add_points(points.drain(..));
                             points
                                 .push(Point::new(p.x.try_into().unwrap(), p.y.try_into().unwrap()));
                         }
@@ -57,7 +57,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                         }
                         kurbo::PathEl::ClosePath => {
                             let p = points.first().cloned();
-                            ret.add_points(points.drain(..), true);
+                            ret.add_cycle(points.drain(..));
                             if let Some(p) = p {
                                 points.push(p);
                             }
@@ -66,7 +66,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     });
 
                     if points.len() > 1 {
-                        ret.add_points(points.drain(..), false);
+                        ret.add_points(points.drain(..));
                     }
                 }
                 _ => {}

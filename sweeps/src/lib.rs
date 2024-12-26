@@ -1,4 +1,4 @@
-#![feature(float_next_up_down, array_windows)]
+#![warn(missing_docs)]
 
 mod geom;
 mod num;

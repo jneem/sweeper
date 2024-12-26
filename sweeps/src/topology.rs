@@ -315,8 +315,8 @@ impl<F: Float> Topology<F> {
 
     pub fn from_segments(segments: &Segments<F>) -> Self {
         let mut ret = Self {
-            shape_a: vec![false; segments.segs.len()],
-            open_segs: vec![VecDeque::new(); segments.segs.len()],
+            shape_a: vec![false; segments.len()],
+            open_segs: vec![VecDeque::new(); segments.len()],
             winding: OutputSegVec::default(),
             point: HalfOutputSegVec::default(),
             point_neighbors: HalfOutputSegVec::default(),
@@ -329,10 +329,10 @@ impl<F: Float> Topology<F> {
         ret.shape_a[0] = true;
         // FIXME: unwrap. This topology stuff only works with closed contours, but we should
         // have a more robust API.
-        let mut idx = segments.contour_next[start.0].unwrap();
+        let mut idx = segments.contour_next(start).unwrap();
         while idx != start {
             ret.shape_a[idx.0] = true;
-            idx = segments.contour_next[idx.0].unwrap();
+            idx = segments.contour_next(idx).unwrap();
         }
         ret
     }
@@ -788,7 +788,7 @@ mod tests {
     fn square_and_diamond() {
         let mut segs =
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
-        segs.add_points([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)], true);
+        segs.add_cycle([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::build(&segs, &eps);
 
@@ -816,10 +816,7 @@ mod tests {
     fn nested_squares() {
         let mut segs =
             Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
-        segs.add_points(
-            [p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)],
-            true,
-        );
+        segs.add_cycle([p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::build(&segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
@@ -831,8 +828,8 @@ mod tests {
     fn inner_loop() {
         let mut segs =
             Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
-        segs.add_points([p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)], true);
-        segs.add_points([p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)], true);
+        segs.add_cycle([p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)]);
+        segs.add_cycle([p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::build(&segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);

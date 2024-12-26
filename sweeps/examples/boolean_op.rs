@@ -75,7 +75,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     let mut points = Vec::<Point<Float>>::new();
                     kurbo::flatten(kurbo_els, 1e-3, |el| match el {
                         kurbo::PathEl::MoveTo(p) => {
-                            ret.add_points(points.drain(..), false);
+                            ret.add_points(points.drain(..));
                             points
                                 .push(Point::new(p.x.try_into().unwrap(), p.y.try_into().unwrap()));
                         }
@@ -85,7 +85,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                         }
                         kurbo::PathEl::ClosePath => {
                             let p = points.first().cloned();
-                            ret.add_points(points.drain(..), true);
+                            ret.add_cycle(points.drain(..));
                             if let Some(p) = p {
                                 points.push(p);
                             }
@@ -94,7 +94,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     });
 
                     if points.len() > 1 {
-                        ret.add_points(points.drain(..), false);
+                        ret.add_points(points.drain(..));
                     }
                 }
                 _ => {}
@@ -147,27 +147,17 @@ pub fn main() -> anyhow::Result<()> {
 
         let mut data = svg::node::element::path::Data::new();
         let start_idx = seg_idx;
-        let seg = segments.get(seg_idx);
-        let p = if segments.orientation[seg_idx.0] {
-            &seg.start
-        } else {
-            &seg.end
-        };
+        let p = segments.oriented_start(seg_idx);
         data = data.move_to((p.x.into_inner(), p.y.into_inner()));
 
-        while let Some(idx) = segments.contour_next[seg_idx.0] {
+        while let Some(idx) = segments.contour_next(seg_idx) {
             seg_idx = idx;
             visited.insert(seg_idx);
             if seg_idx == start_idx {
                 data = data.close();
                 break;
             } else {
-                let seg = segments.get(seg_idx);
-                let p = if segments.orientation[seg_idx.0] {
-                    &seg.start
-                } else {
-                    &seg.end
-                };
+                let p = segments.oriented_start(seg_idx);
                 data = data.line_to((p.x.into_inner(), p.y.into_inner()));
             }
         }

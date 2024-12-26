@@ -29,7 +29,7 @@ impl<F: Float> SweepEvent<F> {
 
     /// Create an enter and an exit event for a line segment (which should be non-horizontal).
     pub fn from_segment(i: SegIdx, arena: &Segments<F>) -> (Self, Self) {
-        let s = arena.get(i);
+        let s = &arena[i];
         (
             SweepEvent {
                 y: s.start.y.clone(),

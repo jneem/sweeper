@@ -1,3 +1,7 @@
+#![allow(missing_docs)]
+
+//! Functionality for constructing perturbations for testing.
+
 use malachite::{num::conversion::traits::RoundingFrom, rounding_modes::RoundingMode, Rational};
 use ordered_float::NotNan;
 use proptest::{arbitrary::any, prop_oneof, strategy::Strategy};

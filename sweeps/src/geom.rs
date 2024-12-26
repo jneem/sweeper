@@ -11,7 +11,15 @@ use crate::num::Float;
 /// algorithm (which moves in increasing `y`).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Point<F: Float> {
+    /// Vertical coordinate.
+    ///
+    /// Although it isn't important for functionality, the documentation and method naming
+    /// assumes that larger values are down.
     pub y: F,
+    /// Horizontal component.
+    ///
+    /// Although it isn't important for functionality, the documentation and method naming
+    /// assumes that larger values are to the right.
     pub x: F,
 }
 
