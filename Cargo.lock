@@ -369,6 +369,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
 
 [[package]]
+name = "linesweeper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_matches",
+ "clap",
+ "insta",
+ "kurbo",
+ "malachite",
+ "ordered-float",
+ "proptest",
+ "robust",
+ "serde",
+ "svg",
+ "usvg",
+]
+
+[[package]]
 name = "linked-hash-map"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -703,24 +721,6 @@ checksum = "794de53cc48eaabeed0ab6a3404a65f40b3e38c067e4435883a65d2aa4ca000e"
 dependencies = [
  "kurbo",
  "siphasher",
-]
-
-[[package]]
-name = "sweeps"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_matches",
- "clap",
- "insta",
- "kurbo",
- "malachite",
- "ordered-float",
- "proptest",
- "robust",
- "serde",
- "svg",
- "usvg",
 ]
 
 [[package]]

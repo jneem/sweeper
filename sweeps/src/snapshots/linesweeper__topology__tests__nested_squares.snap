@@ -12,12 +12,8 @@ expression: "(top, contours)"
     false,
     false,
     false,
-    false,
-    false,
   ],
   open_segs: [
-    [],
-    [],
     [],
     [],
     [],
@@ -62,7 +58,7 @@ expression: "(top, contours)"
       HalfSegmentWindingNumbers(
         counter_clockwise: WindingNumber(
           shape_a: -1,
-          shape_b: 1,
+          shape_b: -1,
         ),
         clockwise: WindingNumber(
           shape_a: -1,
@@ -76,7 +72,7 @@ expression: "(top, contours)"
         ),
         clockwise: WindingNumber(
           shape_a: -1,
-          shape_b: 1,
+          shape_b: -1,
         ),
       ),
       HalfSegmentWindingNumbers(
@@ -86,46 +82,16 @@ expression: "(top, contours)"
         ),
         clockwise: WindingNumber(
           shape_a: -1,
-          shape_b: 1,
+          shape_b: -1,
         ),
       ),
       HalfSegmentWindingNumbers(
         counter_clockwise: WindingNumber(
           shape_a: -1,
-          shape_b: 2,
+          shape_b: -1,
         ),
         clockwise: WindingNumber(
           shape_a: -1,
-          shape_b: 1,
-        ),
-      ),
-      HalfSegmentWindingNumbers(
-        counter_clockwise: WindingNumber(
-          shape_a: -1,
-          shape_b: 1,
-        ),
-        clockwise: WindingNumber(
-          shape_a: -1,
-          shape_b: 2,
-        ),
-      ),
-      HalfSegmentWindingNumbers(
-        counter_clockwise: WindingNumber(
-          shape_a: -1,
-          shape_b: 1,
-        ),
-        clockwise: WindingNumber(
-          shape_a: -1,
-          shape_b: 2,
-        ),
-      ),
-      HalfSegmentWindingNumbers(
-        counter_clockwise: WindingNumber(
-          shape_a: -1,
-          shape_b: 0,
-        ),
-        clockwise: WindingNumber(
-          shape_a: 0,
           shape_b: 0,
         ),
       ),
@@ -157,35 +123,23 @@ expression: "(top, contours)"
       ),
       Point(
         y: -1.0,
-        x: -1.5,
+        x: -1.0,
       ),
       Point(
         y: -1.0,
-        x: -1.5,
+        x: -1.0,
       ),
       Point(
         y: -1.0,
-        x: 1.5,
+        x: 1.0,
       ),
       Point(
-        y: 0.0,
-        x: -0.1,
-      ),
-      Point(
-        y: 0.0,
-        x: -0.1,
-      ),
-      Point(
-        y: 0.0,
-        x: 0.1,
+        y: 1.0,
+        x: -1.0,
       ),
       Point(
         y: 2.0,
         x: -2.0,
-      ),
-      Point(
-        y: 2.0,
-        x: 0.0,
       ),
     ],
     end: [
@@ -202,32 +156,20 @@ expression: "(top, contours)"
         x: 2.0,
       ),
       Point(
-        y: 2.0,
-        x: 0.0,
+        y: 1.0,
+        x: -1.0,
       ),
       Point(
         y: -1.0,
-        x: 1.5,
+        x: 1.0,
       ),
       Point(
-        y: 2.0,
-        x: 0.0,
+        y: 1.0,
+        x: 1.0,
       ),
       Point(
-        y: 2.0,
-        x: 0.0,
-      ),
-      Point(
-        y: 0.0,
-        x: 0.1,
-      ),
-      Point(
-        y: 2.0,
-        x: 0.0,
-      ),
-      Point(
-        y: 2.0,
-        x: 0.0,
+        y: 1.0,
+        x: 1.0,
       ),
       Point(
         y: 2.0,
@@ -299,31 +241,11 @@ expression: "(top, contours)"
       ),
       PointNeighbors(
         clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(7),
-          first_half: true,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(7),
-          first_half: true,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(6),
-          first_half: true,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(6),
-          first_half: true,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(7),
+          idx: OutputSegIdx(3),
           first_half: false,
         ),
         counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(7),
+          idx: OutputSegIdx(3),
           first_half: false,
         ),
       ),
@@ -334,16 +256,6 @@ expression: "(top, contours)"
         ),
         counter_clockwise: HalfOutputSegIdx(
           idx: OutputSegIdx(0),
-          first_half: false,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(9),
-          first_half: false,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(5),
           first_half: false,
         ),
       ),
@@ -351,11 +263,11 @@ expression: "(top, contours)"
     end: [
       PointNeighbors(
         clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(9),
+          idx: OutputSegIdx(7),
           first_half: true,
         ),
         counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(9),
+          idx: OutputSegIdx(7),
           first_half: true,
         ),
       ),
@@ -371,67 +283,37 @@ expression: "(top, contours)"
       ),
       PointNeighbors(
         clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(10),
+          idx: OutputSegIdx(7),
           first_half: false,
         ),
         counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(10),
+          idx: OutputSegIdx(7),
           first_half: false,
         ),
       ),
       PointNeighbors(
         clockwise: HalfOutputSegIdx(
           idx: OutputSegIdx(6),
-          first_half: false,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(9),
-          first_half: false,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(5),
           first_half: true,
         ),
         counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(5),
-          first_half: true,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(10),
-          first_half: true,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(8),
-          first_half: false,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(8),
-          first_half: false,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(3),
-          first_half: false,
-        ),
-      ),
-      PointNeighbors(
-        clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(8),
-          first_half: true,
-        ),
-        counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(8),
+          idx: OutputSegIdx(6),
           first_half: true,
         ),
       ),
       PointNeighbors(
         clockwise: HalfOutputSegIdx(
           idx: OutputSegIdx(5),
+          first_half: true,
+        ),
+        counter_clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(5),
+          first_half: true,
+        ),
+      ),
+      PointNeighbors(
+        clockwise: HalfOutputSegIdx(
+          idx: OutputSegIdx(6),
           first_half: false,
         ),
         counter_clockwise: HalfOutputSegIdx(
@@ -441,12 +323,12 @@ expression: "(top, contours)"
       ),
       PointNeighbors(
         clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(3),
+          idx: OutputSegIdx(5),
           first_half: false,
         ),
         counter_clockwise: HalfOutputSegIdx(
-          idx: OutputSegIdx(10),
-          first_half: true,
+          idx: OutputSegIdx(5),
+          first_half: false,
         ),
       ),
       PointNeighbors(
@@ -471,9 +353,6 @@ expression: "(top, contours)"
       false,
       false,
       false,
-      false,
-      false,
-      false,
     ],
   ),
   scan_east: OutputSegVec(
@@ -484,10 +363,7 @@ expression: "(top, contours)"
       Some(OutputSegIdx(0)),
       Some(OutputSegIdx(3)),
       Some(OutputSegIdx(3)),
-      Some(OutputSegIdx(3)),
-      Some(OutputSegIdx(6)),
-      Some(OutputSegIdx(6)),
-      None,
+      Some(OutputSegIdx(0)),
       None,
     ],
   ),
@@ -505,10 +381,6 @@ expression: "(top, contours)"
         ),
         Point(
           y: 2.0,
-          x: 0.0,
-        ),
-        Point(
-          y: 2.0,
           x: 2.0,
         ),
         Point(
@@ -520,52 +392,34 @@ expression: "(top, contours)"
           x: -2.0,
         ),
       ],
-      outer: true,
       parent: None,
-    ),
-    Contour(
-      points: [
-        Point(
-          y: 2.0,
-          x: 0.0,
-        ),
-        Point(
-          y: -1.0,
-          x: -1.5,
-        ),
-        Point(
-          y: -1.0,
-          x: 1.5,
-        ),
-        Point(
-          y: 2.0,
-          x: 0.0,
-        ),
-      ],
-      outer: false,
-      parent: Some(ContourIdx(0)),
-    ),
-    Contour(
-      points: [
-        Point(
-          y: 0.0,
-          x: -0.1,
-        ),
-        Point(
-          y: 2.0,
-          x: 0.0,
-        ),
-        Point(
-          y: 0.0,
-          x: 0.1,
-        ),
-        Point(
-          y: 0.0,
-          x: -0.1,
-        ),
-      ],
       outer: true,
-      parent: Some(ContourIdx(1)),
+    ),
+    Contour(
+      points: [
+        Point(
+          y: 1.0,
+          x: -1.0,
+        ),
+        Point(
+          y: -1.0,
+          x: -1.0,
+        ),
+        Point(
+          y: -1.0,
+          x: 1.0,
+        ),
+        Point(
+          y: 1.0,
+          x: 1.0,
+        ),
+        Point(
+          y: 1.0,
+          x: -1.0,
+        ),
+      ],
+      parent: Some(ContourIdx(0)),
+      outer: false,
     ),
   ],
 ))
