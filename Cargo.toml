@@ -1,10 +1,23 @@
-[workspace]
+[package]
+name = "linesweeper"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
 
-members = [
-  "sweeps",
-]
+[dependencies]
+malachite = "0.4.5"
+ordered-float = { version = "4.2.0", features = ["serde"] }
+serde = { version = "1.0.216", features = ["derive"] }
 
-resolver = "2"
+[dev-dependencies]
+anyhow = "1.0.80"
+assert_matches = "1.5.0"
+clap = { version = "4.5.1", features = ["derive"] }
+insta = { version = "1.41.1", features = ["serde", "ron"] }
+kurbo = "0.11.1"
+proptest = "1.4.0"
+svg = { version = "0.18", default-features = false }
+usvg = { version = "0.44.0", default-features = false }
 
 [profile.dev.package."*"]
 opt-level = 2

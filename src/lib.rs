@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-#![doc = include_str!("../../README.md")]
+#![doc = include_str!("../README.md")]
 
 mod geom;
 mod num;
