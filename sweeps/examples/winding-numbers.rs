@@ -86,7 +86,7 @@ pub fn main() -> anyhow::Result<()> {
     let segments = svg_to_segments(&tree);
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
-    let top = Topology::build(&segments, &eps);
+    let top = Topology::new(&segments, &eps);
 
     // I tried using `tree.root().abs_bounding_box()`, but I don't understand the output.
     let ys: Vec<_> = segments
@@ -117,8 +117,8 @@ pub fn main() -> anyhow::Result<()> {
     let text_size = "1px";
 
     for seg in top.segment_indices() {
-        let p0 = &top.point[seg.first_half()];
-        let p1 = &top.point[seg.second_half()];
+        let p0 = &top.point(seg.first_half());
+        let p1 = &top.point(seg.second_half());
         let (x0, y0) = (p0.x.into_inner(), p0.y.into_inner());
         let (x1, y1) = (p1.x.into_inner(), p1.y.into_inner());
         let c = svg::node::element::Circle::new()
@@ -154,19 +154,22 @@ pub fn main() -> anyhow::Result<()> {
         let nx = nx / norm * 3.0 * dot_radius;
         let ny = ny / norm * 3.0 * dot_radius;
 
-        let text =
-            svg::node::element::Text::new(format!("{:?}", top.winding[seg].counter_clockwise))
-                .set("font-size", text_size)
-                .set("text-anchor", "start")
-                .set("x", (x0 + x1) / 2.0 + nx)
-                .set("y", (y0 + y1) / 2.0 + ny);
+        let text = svg::node::element::Text::new(format!(
+            "{:?}",
+            top.winding(seg.first_half()).counter_clockwise
+        ))
+        .set("font-size", text_size)
+        .set("text-anchor", "start")
+        .set("x", (x0 + x1) / 2.0 + nx)
+        .set("y", (y0 + y1) / 2.0 + ny);
         document = document.add(text);
 
-        let text = svg::node::element::Text::new(format!("{:?}", top.winding[seg].clockwise))
-            .set("font-size", text_size)
-            .set("text-anchor", "end")
-            .set("x", (x0 + x1) / 2.0 - nx)
-            .set("y", (y0 + y1) / 2.0 - ny);
+        let text =
+            svg::node::element::Text::new(format!("{:?}", top.winding(seg.first_half()).clockwise))
+                .set("font-size", text_size)
+                .set("text-anchor", "end")
+                .set("x", (x0 + x1) / 2.0 - nx)
+                .set("y", (y0 + y1) / 2.0 - ny);
         document = document.add(text);
     }
 

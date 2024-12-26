@@ -11,7 +11,9 @@ use crate::{
 /// numbers, one for each shape.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Default, serde::Serialize)]
 pub struct WindingNumber {
+    /// The winding number of the first shape.
     pub shape_a: i32,
+    /// The winding number of the second shape.
     pub shape_b: i32,
 }
 
@@ -65,15 +67,18 @@ impl std::fmt::Debug for HalfSegmentWindingNumbers {
 /// There's no compile-time magic preventing misuse of this index, but you
 /// should only use this to index into the [`Topology`] that you got it from.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
-pub struct OutputSegIdx(pub usize);
+pub struct OutputSegIdx(usize);
 
 impl OutputSegIdx {
+    /// Returns an index to the first half of this output segment.
     pub fn first_half(self) -> HalfOutputSegIdx {
         HalfOutputSegIdx {
             idx: self,
             first_half: true,
         }
     }
+
+    /// Returns an index to the second half of this output segment.
     pub fn second_half(self) -> HalfOutputSegIdx {
         HalfOutputSegIdx {
             idx: self,
@@ -82,6 +87,11 @@ impl OutputSegIdx {
     }
 }
 
+/// An index that refers to one end of an output segment.
+///
+/// The two ends of an output segment are sweep-line ordered: the "first" half
+/// has a smaller `y` coordinate (or smaller `x` coordinate if the `y`s are
+/// tied) than the "second" half.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct HalfOutputSegIdx {
     idx: OutputSegIdx,
@@ -182,10 +192,16 @@ impl std::fmt::Debug for PointNeighbors {
     }
 }
 
+/// Consumes sweep-line output and computes topology.
+///
+/// Computes winding numbers and boolean operations. In principle this could be extended
+/// to support more-than-boolean operations, but it only does boolean for now. Also,
+/// it currently requires all input paths to be closed; it could be extended to support
+/// things like clipping a potentially non-closed path to a closed path.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Topology<F: Float> {
     /// Indexed by `SegIdx`.
-    pub shape_a: Vec<bool>,
+    shape_a: Vec<bool>,
     /// Indexed by `SegIdx`.
     ///
     /// For each input segment, this is the list of output segments that we've started
@@ -205,23 +221,51 @@ pub struct Topology<F: Float> {
     /// first encounter the output segment pointing down and add an unfinished segment
     /// for that. Then we'll add an output segment for the horizontal line and so
     /// at that point there will be three unfinished output segments.
-    pub open_segs: Vec<VecDeque<OutputSegIdx>>,
+    open_segs: Vec<VecDeque<OutputSegIdx>>,
+    /// Winding numbers of each segment.
+    ///
     /// This is sort of logically indexed by `HalfOutputSegIdx`, because we can look at the
     /// `HalfSegmentWindingNumbers` for each `HalfOutputSegIdx`. But since the two halves of
     /// the winding numbers are determined by one another, we only store the winding numbers
     /// for the start half of the output segment.
-    pub winding: OutputSegVec<HalfSegmentWindingNumbers>,
-    pub point: HalfOutputSegVec<Point<F>>,
-    pub point_neighbors: HalfOutputSegVec<PointNeighbors>,
+    winding: OutputSegVec<HalfSegmentWindingNumbers>,
+    /// The output points.
+    point: HalfOutputSegVec<Point<F>>,
+    /// For each output half-segment, its neighboring segments are the ones that share a point with it.
+    point_neighbors: HalfOutputSegVec<PointNeighbors>,
     /// Marks the output segments that have been deleted due to merges of coindident segments.
-    pub deleted: OutputSegVec<bool>,
+    deleted: OutputSegVec<bool>,
     /// The map from a segment to its scan-left neighbor is always strictly decreasing (in the
     /// index). This ensures that a scan will always terminate, and it also means that we can
     /// build the contours in increasing `OutputSegIdx` order.
-    pub scan_east: OutputSegVec<Option<OutputSegIdx>>,
+    scan_east: OutputSegVec<Option<OutputSegIdx>>,
 }
 
 impl<F: Float> Topology<F> {
+    /// We're working on building up a list of half-segments that all meet at a point.
+    /// Maybe we've done a few already, but there's a region where we may add more.
+    /// Something like this:
+    ///
+    /// ```text
+    ///         \
+    ///          \  ?
+    ///           \  ?
+    ///       -----o  ?
+    ///           /|  ?
+    ///          / |?
+    ///         /  |
+    /// ```
+    ///
+    /// `first_seg` is the most-counter-clockwise segment we've added so far
+    /// (the one pointing down in the picture above, and `last_seg` is the
+    /// most-clockwise one (pointing up-left in the picture above). These can be
+    /// `None` if we haven't actually added any segments left.
+    ///
+    /// This method adds more segments to the picture, starting at `last_seg`
+    /// and working clockwise. It works only with segment indices, so it's the
+    /// caller's responsibility to ensure that the geometry is correct, and that
+    /// the provided segments actually go in clockwise order (relative to each
+    /// other, and also relative to the segments we've already placed).
     fn add_segs_clockwise(
         &mut self,
         first_seg: &mut Option<HalfOutputSegIdx>,
@@ -246,6 +290,7 @@ impl<F: Float> Topology<F> {
         }
     }
 
+    /// Like `add_segs_clockwise`, but adds them on the other side.
     fn add_segs_counter_clockwise(
         &mut self,
         first_seg: &mut Option<HalfOutputSegIdx>,
@@ -270,6 +315,15 @@ impl<F: Float> Topology<F> {
         }
     }
 
+    /// Takes some segments where we've already placed the first half, and
+    /// gets ready to place the second half.
+    ///
+    /// The state-tracking is subtle and should be re-considered. The basic
+    /// issue is that (as discussed in the documentation for `open_segs`) a
+    /// single segment index can have three open half-segments at any one time,
+    /// so how do we know which one is ready for its second half? The short
+    /// answer is that we use a double-ended queue, and see `new_half_seg`
+    /// for how we use it.
     fn second_half_segs<'a, 'slf: 'a>(
         &'slf mut self,
         segs: impl Iterator<Item = SegIdx> + 'a,
@@ -282,6 +336,18 @@ impl<F: Float> Topology<F> {
         })
     }
 
+    /// Creates a new half-segment.
+    ///
+    /// This needs to update the open segment state to be compatible with `second_half_segs`.
+    ///
+    /// The key is that we know the order that the segments are processed: any
+    /// horizontal segments will be closed first, followed by segments coming
+    /// from an earlier sweep-line, followed by segments extending down from
+    /// this sweep-line (which won't be closed until we move on to the next
+    /// sweep-line). Therefore, we push horizontal half-segments to the front
+    /// of the queue so that they can be taken next. We push non-horizontal
+    /// half-segments to the back of the queue, so that the older ones (coming
+    /// from the previous sweep-line) will get taken before the new ones.
     fn new_half_seg(
         &mut self,
         idx: SegIdx,
@@ -313,7 +379,7 @@ impl<F: Float> Topology<F> {
         out_idx
     }
 
-    pub fn from_segments(segments: &Segments<F>) -> Self {
+    fn from_segments(segments: &Segments<F>) -> Self {
         let mut ret = Self {
             shape_a: vec![false; segments.len()],
             open_segs: vec![VecDeque::new(); segments.len()],
@@ -337,7 +403,12 @@ impl<F: Float> Topology<F> {
         ret
     }
 
-    pub fn build(segments: &Segments<F>, eps: &F) -> Self {
+    /// Creates a new `Topology` for a collection of segments and a given tolerance.
+    ///
+    /// The segments must contain only closed polylines. For the purpose of boolean ops,
+    /// the first closed polyline determines the first set and all the other polylines determine
+    /// the other set. (Obviously this isn't flexible, and it will be changed. TODO)
+    pub fn new(segments: &Segments<F>, eps: &F) -> Self {
         let mut ret = Self::from_segments(segments);
         let mut sweep_state = weak_ordering::Sweeper::new(segments, eps.clone());
         while let Some(line) = sweep_state.next_line() {
@@ -517,12 +588,14 @@ impl<F: Float> Topology<F> {
         }
     }
 
+    /// Iterates over indices of all output segments.
     pub fn segment_indices(&self) -> impl Iterator<Item = OutputSegIdx> + '_ {
         (0..self.winding.inner.len())
             .map(OutputSegIdx)
             .filter(|i| !self.deleted[*i])
     }
 
+    /// Returns the winding numbers of an output half-segment.
     pub fn winding(&self, idx: HalfOutputSegIdx) -> HalfSegmentWindingNumbers {
         if idx.first_half {
             self.winding[idx.idx]
@@ -531,25 +604,36 @@ impl<F: Float> Topology<F> {
         }
     }
 
-    // We walk contours in sweep-line order of their smallest point. This mostly ensures
-    // that we visit outer contours before we visit their children. However, when the inner
-    // and outer contours share a point, we run into a problem. For example:
-    //
-    // /------------------\
-    // |        /\        |
-    // |       /  \       |
-    // \       \  /      /
-    //  \       \/      /
-    //   \             /
-    //    -------------
-    // (where the top-middle point is supposed to have 4 segments coming out of it; it's
-    // a hard to draw it in ASCII). In this case, we'll "notice" the inner contour when
-    // we realize that we've visited a point twice. At that point, we extract the inner part
-    // into a separate contour and mark it as a child of the outer one. This requires some
-    // slightly sketch indexing, because we need to refer to the outer contour even though
-    // we haven't finished generating it. We solve this by reserving a slot for the unfinished
-    // outer contour as soon as we start walking it.
+    /// Returns the endpoing of an output half-segment.
+    pub fn point(&self, idx: HalfOutputSegIdx) -> &Point<F> {
+        &self.point[idx]
+    }
+
+    /// Returns the contours of some set defined by this topology.
+    ///
+    /// The callback function `inside` takes a winding number and returns `true`
+    /// if a point with that winding number should be in the resulting set. For example,
+    /// to compute a boolean "and" using the non-zero winding rule, `inside` should be
+    /// `|w| w.shape_a != 0 && w.shape_b != 0`.
     pub fn contours(&self, inside: impl Fn(WindingNumber) -> bool) -> Contours<F> {
+        // We walk contours in sweep-line order of their smallest point. This mostly ensures
+        // that we visit outer contours before we visit their children. However, when the inner
+        // and outer contours share a point, we run into a problem. For example:
+        //
+        // /------------------\
+        // |        /\        |
+        // |       /  \       |
+        // \       \  /      /
+        //  \       \/      /
+        //   \             /
+        //    -------------
+        // (where the top-middle point is supposed to have 4 segments coming out of it; it's
+        // a hard to draw it in ASCII). In this case, we'll "notice" the inner contour when
+        // we realize that we've visited a point twice. At that point, we extract the inner part
+        // into a separate contour and mark it as a child of the outer one. This requires some
+        // slightly sketch indexing, because we need to refer to the outer contour even though
+        // we haven't finished generating it. We solve this by reserving a slot for the unfinished
+        // outer contour as soon as we start walking it.
         let mut ret = Contours::default();
         let mut seg_contour: Vec<Option<ContourIdx>> = vec![None; self.winding.inner.len()];
 
@@ -682,14 +766,97 @@ impl<F: Float> Topology<F> {
     }
 }
 
+/// An index for a [`Contour`] within [`Contours`].
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 pub struct ContourIdx(pub usize);
 
+/// A simple, closed polyline.
+///
+/// A contour has no repeated points, and its segments do not intersect.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Contour<F: Float> {
+    /// The points making up this contour.
+    ///
+    /// If you're drawing a contour with line segments, don't forget to close it: the last point
+    /// should be connected to the first point.
     pub points: Vec<Point<F>>,
-    pub outer: bool,
+
+    /// A contour can have a parent, so that sets with holes can be represented as nested contours.
+    /// For example, the shaded set below:
+    ///
+    /// ```text
+    ///   ----------------------
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxx/\xxxxxxxxx|
+    ///   |xxxxxxxx/  \xxxxxxxx|
+    ///   |xxxxxxx/    \xxxxxxx|
+    ///   |xxxxxxx\    /xxxxxxx|
+    ///   |xxxxxxxx\  /xxxxxxxx|
+    ///   |xxxxxxxxx\/xxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   ----------------------
+    /// ```
+    ///
+    /// is represented as a square contour with no parent, and a diamond contour with the square
+    /// as its parent.
+    ///
+    /// A contour can share at most one point with its parent. For example, if you translate the
+    /// diamond above upwards until it touches the top of the square, it will share that top point
+    /// with its parent. You can't make them share two points, though: if you try to translate the
+    /// diamond to a corner...
+    ///
+    /// ```text
+    ///   ----------------------
+    ///   |xx/\xxxxxxxxxxxxxxxx|
+    ///   |x/  \xxxxxxxxxxxxxxx|
+    ///   |/    \xxxxxxxxxxxxxx|
+    ///   |\    /xxxxxxxxxxxxxx|
+    ///   |x\  /xxxxxxxxxxxxxxx|
+    ///   |xx\/xxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   ----------------------
+    /// ```
+    ///
+    /// ...then it will be interpreted as two contours without a parent/child relationship:
+    ///
+    /// ```text
+    ///   ----
+    ///   |xx/
+    ///   |x/
+    ///   |/
+    /// ```
+    ///
+    /// and
+    ///
+    /// ```text
+    ///       ------------------
+    ///       \xxxxxxxxxxxxxxxx|
+    ///        \xxxxxxxxxxxxxxx|
+    ///         \xxxxxxxxxxxxxx|
+    ///   |\    /xxxxxxxxxxxxxx|
+    ///   |x\  /xxxxxxxxxxxxxxx|
+    ///   |xx\/xxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   |xxxxxxxxxxxxxxxxxxxx|
+    ///   ----------------------
+    /// ```
+    ///
     pub parent: Option<ContourIdx>,
+
+    /// Whether this contour is "outer" or not. A contour with no parent is "outer", and
+    /// then they alternate: a contour is "outer" if and only if its parent isn't.
+    ///
+    /// As you walk along a contour, the "occupied" part of the set it help represent is
+    /// on your left. This means that outer contours wind counter-clockwise and inner
+    /// contours wind clockwise.
+    pub outer: bool,
 }
 
 impl<F: Float> Default for Contour<F> {
@@ -702,12 +869,20 @@ impl<F: Float> Default for Contour<F> {
     }
 }
 
+/// A collection of [`Contour`]s.
+///
+/// Can be indexed with a [`ContourIdx`].
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Contours<F: Float> {
-    pub contours: Vec<Contour<F>>,
+    contours: Vec<Contour<F>>,
 }
 
 impl<F: Float> Contours<F> {
+    /// Returns all of the contour indices, grouped by containment.
+    ///
+    /// For each of the inner vecs, the first element is an outer contour with
+    /// no parent. All of the other contours in that inner vec lie inside that
+    /// outer contour.
     pub fn grouped(&self) -> Vec<Vec<ContourIdx>> {
         let mut children = vec![Vec::new(); self.contours.len()];
         let mut top_level = Vec::new();
@@ -733,6 +908,11 @@ impl<F: Float> Contours<F> {
         }
 
         ret
+    }
+
+    /// Iterates over all of the contours.
+    pub fn contours(&self) -> impl Iterator<Item = &Contour<F>> + '_ {
+        self.contours.iter()
     }
 }
 
@@ -769,7 +949,7 @@ mod tests {
         let segs =
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::build(&segs, &eps);
+        let top = Topology::new(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -779,7 +959,7 @@ mod tests {
         let segs =
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::build(&segs, &eps);
+        let top = Topology::new(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -790,7 +970,7 @@ mod tests {
             Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
         segs.add_cycle([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::build(&segs, &eps);
+        let top = Topology::new(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -807,7 +987,7 @@ mod tests {
             p(0.0, 1.0),
         ]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::build(&segs, &eps);
+        let top = Topology::new(&segs, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -818,7 +998,7 @@ mod tests {
             Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
         segs.add_cycle([p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::build(&segs, &eps);
+        let top = Topology::new(&segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));
@@ -831,7 +1011,7 @@ mod tests {
         segs.add_cycle([p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)]);
         segs.add_cycle([p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)]);
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::build(&segs, &eps);
+        let top = Topology::new(&segs, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));

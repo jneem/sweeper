@@ -104,6 +104,7 @@ impl<F: Float> EventQueue<F> {
     }
 }
 
+/// Encapsulates the state of the sweep-line algorithm and allows iterating over sweep lines.
 #[derive(Clone, Debug)]
 pub struct Sweeper<F: Float> {
     pub(crate) y: F,
@@ -134,6 +135,7 @@ pub struct Sweeper<F: Float> {
 }
 
 impl<F: Float> Sweeper<F> {
+    /// Creates a new sweeper for a collection of segments, and with a given tolerance.
     pub fn new(segments: &Segments<F>, eps: F) -> Self {
         let events = EventQueue::from_segments(segments);
 
@@ -150,6 +152,9 @@ impl<F: Float> Sweeper<F> {
         }
     }
 
+    /// Moves the sweep forward, returning the next sweep line.
+    ///
+    /// Returns `None` when sweeping is complete.
     pub fn next_line(&mut self) -> Option<SweepLine<'_, F>> {
         // Process the exits from the last y position.
         self.process_exits();
@@ -485,7 +490,7 @@ impl Segment<Rational> {
     // The moment our lower bound crosses to the right of `other`'s upper bound.
     // (Actually, it could give too large a value right now, because it doesn't take the
     // "chamfers" into account.)
-    pub fn exact_eps_crossing(&self, other: &Self, eps: &Rational) -> Option<Rational> {
+    pub(crate) fn exact_eps_crossing(&self, other: &Self, eps: &Rational) -> Option<Rational> {
         let y0 = self.start.y.clone().max(other.start.y.clone());
         let y1 = self.end.y.clone().min(other.end.y.clone());
         let scaled_eps = self.scaled_eps(eps);
@@ -682,6 +687,7 @@ impl SegmentOrder {
 /// It will change.
 #[derive(Clone, Debug)]
 pub struct SweepLine<'a, F: Float> {
+    /// The `y` coordinate of this sweep line.
     pub y: &'a F,
     pub(crate) old_line: &'a SegmentOrder,
     pub(crate) new_line: &'a SegmentOrder,
