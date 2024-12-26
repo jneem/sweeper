@@ -3,6 +3,9 @@ name = "linesweeper"
 version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+authors = ["Joe Neeman <joe@neeman.me>"]
+description = "Robust sweep-line algorithm and two-dimensional boolean ops"
+repository = "https://github.com/jneem/linesweeper"
 
 [dependencies]
 malachite = "0.4.5"
