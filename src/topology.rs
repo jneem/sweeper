@@ -1,10 +1,15 @@
+//! Utilities for computing topological properties of closed polylines.
+//!
+//! This consumes the output of the sweep-line algorithm and does things
+//! like winding number computations and boolean operations.
+
 use std::collections::{HashMap, VecDeque};
 
 use crate::{
     geom::Point,
     num::Float,
     segments::{SegIdx, Segments},
-    weak_ordering::{self, OutputEventBatcher, SweepLine},
+    sweep::{OutputEventBatcher, SweepLine, Sweeper},
 };
 
 /// We support boolean operations, so a "winding number" for us is two winding
@@ -119,9 +124,9 @@ impl std::fmt::Debug for HalfOutputSegIdx {
 
 /// A vector indexed by half-output segments.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize)]
-pub struct HalfOutputSegVec<T> {
-    pub start: Vec<T>,
-    pub end: Vec<T>,
+struct HalfOutputSegVec<T> {
+    start: Vec<T>,
+    end: Vec<T>,
 }
 
 impl<T> Default for HalfOutputSegVec<T> {
@@ -156,7 +161,7 @@ impl<T> std::ops::IndexMut<HalfOutputSegIdx> for HalfOutputSegVec<T> {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize)]
-pub struct OutputSegVec<T> {
+struct OutputSegVec<T> {
     inner: Vec<T>,
 }
 
@@ -181,7 +186,7 @@ impl<T> std::ops::IndexMut<OutputSegIdx> for OutputSegVec<T> {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, serde::Serialize)]
-pub struct PointNeighbors {
+struct PointNeighbors {
     clockwise: HalfOutputSegIdx,
     counter_clockwise: HalfOutputSegIdx,
 }
@@ -410,7 +415,7 @@ impl<F: Float> Topology<F> {
     /// the other set. (Obviously this isn't flexible, and it will be changed. TODO)
     pub fn new(segments: &Segments<F>, eps: &F) -> Self {
         let mut ret = Self::from_segments(segments);
-        let mut sweep_state = weak_ordering::Sweeper::new(segments, eps.clone());
+        let mut sweep_state = Sweeper::new(segments, eps.clone());
         while let Some(line) = sweep_state.next_line() {
             for &(start, end) in line.changed_intervals() {
                 let positions = line.events_in_range((start, end), segments, eps);

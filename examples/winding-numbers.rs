@@ -4,7 +4,7 @@ use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
 
-use linesweeper::{Point, Segments, Topology};
+use linesweeper::{topology::Topology, Point, Segments};
 
 type Float = NotNan<f64>;
 

@@ -2,7 +2,10 @@ use std::{collections::HashSet, path::PathBuf};
 
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
-use linesweeper::{OutputEvent, OutputEventKind, Point, SegIdx, Segments};
+use linesweeper::{
+    sweep::{OutputEvent, OutputEventKind},
+    Point, SegIdx, Segments,
+};
 use ordered_float::NotNan;
 
 type Float = NotNan<f64>;
@@ -142,7 +145,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
     let mut collector = SegmentCollector::new(segments.len());
-    linesweeper::sweep(&segments, &eps, |y, ev| collector.handle(y, ev));
+    linesweeper::sweep::sweep(&segments, &eps, |y, ev| collector.handle(y, ev));
 
     let segs = collector.finish(&segments);
 

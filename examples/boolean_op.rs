@@ -4,7 +4,7 @@ use clap::Parser;
 use ordered_float::NotNan;
 use svg::Document;
 
-use linesweeper::{Point, Segments, Topology};
+use linesweeper::{topology::Topology, Point, Segments};
 
 type Float = NotNan<f64>;
 
