@@ -8,10 +8,7 @@
 
 use std::collections::BTreeSet;
 use std::ops::Range;
-use std::{
-    cmp::Reverse,
-    collections::{HashMap, HashSet},
-};
+use std::{cmp::Reverse, collections::HashMap};
 
 use malachite::Rational;
 
@@ -22,15 +19,52 @@ use crate::{
     sweep::{SweepEvent, SweepEventKind},
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub(crate) struct SegmentOrderEntry {
+    idx: SegIdx,
+    exit: bool,
+    enter: bool,
+    needs_position: bool,
+}
+
+impl SegmentOrderEntry {
+    fn reset_state(&mut self) {
+        self.exit = false;
+        self.enter = false;
+        self.needs_position = false;
+    }
+}
+
+impl From<SegIdx> for SegmentOrderEntry {
+    fn from(idx: SegIdx) -> Self {
+        Self {
+            idx,
+            exit: false,
+            enter: false,
+            needs_position: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
 pub(crate) struct SegmentOrder {
-    pub(crate) segs: Vec<SegIdx>,
+    pub(crate) segs: Vec<SegmentOrderEntry>,
+}
+
+impl SegmentOrder {
+    fn seg(&self, i: usize) -> SegIdx {
+        self.segs[i].idx
+    }
+
+    fn is_exit(&self, i: usize) -> bool {
+        self.segs[i].exit
+    }
 }
 
 impl FromIterator<SegIdx> for SegmentOrder {
     fn from_iter<T: IntoIterator<Item = SegIdx>>(iter: T) -> Self {
         SegmentOrder {
-            segs: iter.into_iter().collect(),
+            segs: iter.into_iter().map(SegmentOrderEntry::from).collect(),
         }
     }
 }
@@ -92,10 +126,10 @@ impl<F: Float> EventQueue<F> {
     pub fn next_is_stage_2(&self, y: &F) -> bool {
         self.next_y() == Some(y)
             && self.next_kind().is_some_and(|kind| match kind {
+                SweepEventKind::Exit(_) => true,
                 SweepEventKind::Enter(_)
                 | SweepEventKind::Horizontal(_)
-                | SweepEventKind::Exit(_) => false,
-                SweepEventKind::Intersection { .. } => true,
+                | SweepEventKind::Intersection { .. } => false,
             })
     }
 
@@ -122,16 +156,11 @@ pub struct Sweeper<F: Float> {
     // - any segments that changed order with any other segments
     // - any segments that entered or exited
     // - any segments that are between the endpoints of contour-adjacent segments.
-    pub(crate) segs_needing_positions: HashSet<SegIdx>,
-    // Segments marked as having exited the sweep-line. We don't remove them
-    // immediately because that shifts indices around and makes it harder to
-    // compare old vs. new sweep-lines. Instead, we remember that we're supposed
-    // to remove them and then actually remove them when we advance `y`.
     //
-    // This could potentially be part of the `segs` list instead of as a separate
-    // map.
-    pub(crate) exits: HashSet<SegIdx>,
-    pub(crate) entrances: HashSet<SegIdx>,
+    // These segments are identified by their index in the current order, so that
+    // it's fast to find them. It means that we need to do some fixing-up if indices after
+    // inserting all the new segments.
+    pub(crate) segs_needing_positions: Vec<usize>,
     changed_intervals: Vec<(usize, usize)>,
 }
 
@@ -147,9 +176,7 @@ impl<F: Float> Sweeper<F> {
             y: events.next_y().unwrap().clone(),
             events,
             segments: segments.clone(),
-            segs_needing_positions: HashSet::new(),
-            exits: HashSet::new(),
-            entrances: HashSet::new(),
+            segs_needing_positions: Vec::new(),
             changed_intervals: Vec::new(),
         }
     }
@@ -158,8 +185,6 @@ impl<F: Float> Sweeper<F> {
     ///
     /// Returns `None` when sweeping is complete.
     pub fn next_line(&mut self) -> Option<SweepLine<'_, F>> {
-        // Process the exits from the last y position.
-        self.process_exits();
         #[cfg(debug_assertions)]
         self.check_invariants();
 
@@ -175,51 +200,49 @@ impl<F: Float> Sweeper<F> {
             self.check_invariants();
         }
 
-        // Copy the new line to the old line. Basically self.old_line = self.line.clone(), but keeping the
-        // old allocation.
-        self.old_line.segs.clear();
-        self.old_line.segs.extend_from_slice(&self.line.segs);
-
-        // Process all the reorderings
+        // Process all the exit events.
         while self.events.next_is_stage_2(&y) {
             self.step();
             #[cfg(debug_assertions)]
             self.check_invariants();
         }
 
-        // Process all the exit events at this y.
+        // Copy the new line to the old line. Basically self.old_line = self.line.clone(), but keeping the
+        // old allocation.
+        self.old_line.segs.clear();
+        self.old_line.segs.extend_from_slice(&self.line.segs);
+
+        // Process all the intersection events at this y.
         while self.events.next_is_at(&y) {
             self.step();
             #[cfg(debug_assertions)]
             self.check_invariants();
         }
-        self.segs_needing_positions
-            .extend(self.exits.iter().copied());
 
         self.compute_changed_intervals();
         Some(SweepLine { state: self })
     }
 
-    fn process_exits(&mut self) {
-        for &seg_idx in &self.exits {
-            let pos = self
-                .line
-                .position(seg_idx)
-                .expect("exit for a segment we don't have");
-            self.line.segs.remove(pos);
-        }
-        self.exits.clear();
-    }
-
     fn advance(&mut self, y: F) {
-        self.process_exits();
+        // Reset states, keeping track of the exits so that we can
+        // remove them.
+        self.segs_needing_positions.retain(|idx| {
+            let is_exit = self.line.segs[*idx].exit;
+            self.line.segs[*idx].reset_state();
+            is_exit
+        });
+
+        // Remove the exiting segments in reverse order, so the indices stay good.
+        self.segs_needing_positions.sort();
+        for &idx in self.segs_needing_positions.iter().rev() {
+            self.line.segs.remove(idx);
+        }
         self.y = y;
         self.segs_needing_positions.clear();
-        self.entrances.clear();
     }
 
     fn intersection_scan_right(&mut self, start_idx: usize) {
-        let seg = &self.segments[self.line.segs[start_idx]];
+        let seg = &self.segments[self.line.seg(start_idx)];
         let y = &self.y;
 
         // We're allowed to take a potentially-smaller height bound by taking
@@ -228,16 +251,16 @@ impl<F: Float> Sweeper<F> {
         let mut height_bound = seg.end.y.clone();
 
         for j in (start_idx + 1)..self.line.segs.len() {
-            if self.exits.contains(&self.line.segs[j]) {
+            if self.line.is_exit(j) {
                 continue;
             }
-            let other = &self.segments[self.line.segs[j]];
+            let other = &self.segments[self.line.seg(j)];
             height_bound = height_bound.min(other.end.y.clone());
 
             if let Some(int_y) = seg.crossing_y(other, &self.eps) {
                 self.events.push(SweepEvent::intersection(
-                    self.line.segs[start_idx],
-                    self.line.segs[j],
+                    self.line.seg(start_idx),
+                    self.line.seg(j),
                     int_y.clone().max(y.clone()),
                 ));
                 height_bound = int_y.min(height_bound);
@@ -257,21 +280,21 @@ impl<F: Float> Sweeper<F> {
     }
 
     fn intersection_scan_left(&mut self, start_idx: usize) {
-        let seg = &self.segments[self.line.segs[start_idx]];
+        let seg = &self.segments[self.line.seg(start_idx)];
         let y = &self.y;
 
         let mut height_bound = seg.end.y.clone();
 
         for j in (0..start_idx).rev() {
-            if self.exits.contains(&self.line.segs[j]) {
+            if self.line.is_exit(j) {
                 continue;
             }
-            let other = &self.segments[self.line.segs[j]];
+            let other = &self.segments[self.line.seg(j)];
             height_bound = height_bound.min(other.end.y.clone());
             if let Some(int_y) = other.crossing_y(seg, &self.eps) {
                 self.events.push(SweepEvent::intersection(
-                    self.line.segs[j],
-                    self.line.segs[start_idx],
+                    self.line.seg(j),
+                    self.line.seg(start_idx),
                     int_y.clone().max(self.y.clone()),
                 ));
                 height_bound = int_y.min(height_bound);
@@ -297,7 +320,7 @@ impl<F: Float> Sweeper<F> {
         }
     }
 
-    fn insert(&mut self, pos: usize, seg: SegIdx) {
+    fn insert(&mut self, pos: usize, seg: SegmentOrderEntry) {
         self.line.segs.insert(pos, seg);
         self.intersection_scan_right(pos);
         self.intersection_scan_left(pos);
@@ -316,30 +339,35 @@ impl<F: Float> Sweeper<F> {
                 let pos = self
                     .line
                     .insertion_idx(&self.y, &self.segments, new_seg, &self.eps);
-                self.insert(pos, seg_idx);
-                self.segs_needing_positions.insert(seg_idx);
-                self.mark_endpoint(seg_idx, pos, true);
-                self.entrances.insert(seg_idx);
+                let mut entry = SegmentOrderEntry::from(seg_idx);
+                entry.enter = true;
+                self.insert(pos, entry);
+
+                // TODO: see if we can make this not quadratic
+                for other_pos in &mut self.segs_needing_positions {
+                    if *other_pos >= pos {
+                        *other_pos += 1;
+                    }
+                }
+                self.segs_needing_positions.push(pos);
             }
             SweepEventKind::Exit(seg_idx) => {
-                // It's important that this goes before `scan_for_removal`, so that
-                // the scan doesn't get confused by the segment that should be marked
-                // for exit.
-                self.exits.insert(seg_idx);
                 let pos = self
                     .line
                     .position(seg_idx)
                     .expect("exit for a segment we don't have");
+                // It's important that this goes before `scan_for_removal`, so that
+                // the scan doesn't get confused by the segment that should be marked
+                // for exit.
+                self.line.segs[pos].exit = true;
                 self.scan_for_removal(pos);
-                self.segs_needing_positions.insert(seg_idx);
-                self.mark_endpoint(seg_idx, pos, false);
+                self.segs_needing_positions.push(pos);
             }
             SweepEventKind::Intersection { left, right } => {
-                let left_idx = self.line.segs.iter().position(|&x| x == left).unwrap();
-                let right_idx = self.line.segs.iter().position(|&x| x == right).unwrap();
+                let left_idx = self.line.position(left).unwrap();
+                let right_idx = self.line.position(right).unwrap();
                 if left_idx < right_idx {
-                    self.segs_needing_positions
-                        .extend(&self.line.segs[left_idx..=right_idx]);
+                    self.segs_needing_positions.extend(left_idx..=right_idx);
                     let left_seg = &self.segments[left];
                     let eps = &self.eps;
                     let y = &self.y;
@@ -351,7 +379,7 @@ impl<F: Float> Sweeper<F> {
                     let mut to_move = vec![(left_idx, self.line.segs[left_idx])];
                     let threshold = eps.clone() / F::from_f32(-4.0);
                     for j in (left_idx + 1)..right_idx {
-                        let seg = &self.segments[self.line.segs[j]];
+                        let seg = &self.segments[self.line.seg(j)];
                         if seg.lower(y, eps) - left_seg.upper(y, eps) > threshold {
                             to_move.push((j, self.line.segs[j]));
                         }
@@ -377,12 +405,19 @@ impl<F: Float> Sweeper<F> {
                 let pos = self
                     .line
                     .insertion_idx(&self.y, &self.segments, new_seg, &self.eps);
-                self.insert(pos, seg_idx);
-                self.segs_needing_positions.insert(seg_idx);
-                self.mark_endpoint(seg_idx, pos, true);
-                self.mark_endpoint(seg_idx, pos, false);
-                self.entrances.insert(seg_idx);
-                self.exits.insert(seg_idx);
+                let mut entry = SegmentOrderEntry::from(seg_idx);
+                entry.enter = true;
+                entry.exit = true;
+                self.insert(pos, entry);
+
+                // TODO: see if we can make this not quadratic
+                for other_pos in &mut self.segs_needing_positions {
+                    if *other_pos >= pos {
+                        *other_pos += 1;
+                    }
+                }
+
+                self.segs_needing_positions.push(pos);
             }
         }
     }
@@ -397,13 +432,21 @@ impl<F: Float> Sweeper<F> {
             );
         }
 
-        for &seg_idx in &self.line.segs {
+        for &seg_entry in &self.line.segs {
+            let seg_idx = seg_entry.idx;
             let seg = &self.segments[seg_idx];
             assert!(
                 (&seg.start.y..=&seg.end.y).contains(&&self.y),
                 "segment {seg:?} out of range at y={:?}",
                 self.y
             );
+        }
+
+        // All segments marked as stering or exiting must be in `self.segs_needing_positions`
+        for (idx, &seg_entry) in self.line.segs.iter().enumerate() {
+            if seg_entry.exit || seg_entry.enter {
+                assert!(self.segs_needing_positions.contains(&idx));
+            }
         }
 
         assert!(self
@@ -413,15 +456,15 @@ impl<F: Float> Sweeper<F> {
 
         let eps = self.eps.to_exact();
         for i in 0..self.line.segs.len() {
-            if self.exits.contains(&self.line.segs[i]) {
+            if self.line.is_exit(i) {
                 continue;
             }
             for j in (i + 1)..self.line.segs.len() {
-                if self.exits.contains(&self.line.segs[j]) {
+                if self.line.is_exit(j) {
                     continue;
                 }
-                let segi = self.segments[self.line.segs[i]].to_exact();
-                let segj = self.segments[self.line.segs[j]].to_exact();
+                let segi = self.segments[self.line.seg(i)].to_exact();
+                let segj = self.segments[self.line.seg(j)].to_exact();
 
                 if let Some(y_int) = segi.exact_eps_crossing(&segj, &eps) {
                     if y_int >= self.y.to_exact() {
@@ -453,41 +496,12 @@ impl<F: Float> Sweeper<F> {
         }
     }
 
-    /// The segment `idx` just entered (or exited) at index `idx`. If any of
-    /// the nearby (in the sweep-line order) segments are nearby (physically),
-    /// record the fact that they need to be given explicit horizontal
-    /// positions.
-    fn mark_endpoint(&mut self, idx: SegIdx, pos: usize, enter: bool) {
-        let x = if enter {
-            &self.segments[idx].start.x
-        } else {
-            &self.segments[idx].end.x
-        };
-
-        // We'll look at horizontal positions to figure out where to stop searching
-        // for nearby points. Those are accurate to eps/8, so set a threshold at eps/4.
-        let slack = self.eps.clone() / F::from_f32(4.0);
-        for &seg_idx in &self.line.segs[(pos + 1)..] {
-            if self.segments[seg_idx].lower(&self.y, &self.eps) - x.clone() > slack {
-                break;
-            }
-            self.segs_needing_positions.insert(seg_idx);
-        }
-        for &seg_idx in self.line.segs[0..pos].iter().rev() {
-            if self.segments[seg_idx].at_y(&self.y) - x.clone() < -slack.clone() {
-                break;
-            }
-            self.segs_needing_positions.insert(seg_idx);
-        }
-    }
-
     /// Updates our internal `changed_intervals` state based on the segments marked
     /// as needing positions.
     ///
     /// For each segment marked as needing a position, we expand it to a range of
     /// physically nearby segments, and then we deduplicate and merge those ranges.
     fn compute_changed_intervals(&mut self) {
-        let mut changed: BTreeSet<_> = self.segs_needing_positions.iter().cloned().collect();
         self.changed_intervals.clear();
         let y = &self.y;
 
@@ -498,21 +512,25 @@ impl<F: Float> Sweeper<F> {
         let segments = &self.segments;
         let slack = eps.clone() / F::from_f32(4.0);
 
-        // Copy-pasted from `influence_range`
-        while let Some(seg_idx) = changed.pop_first() {
+        for &idx in &self.segs_needing_positions {
+            if self.line.segs[idx].needs_position {
+                continue;
+            }
+
             // unwrap: segs_needing_positions should all be in the line.
-            let idx = self.line.position(seg_idx).unwrap();
             let mut start_idx = idx;
+            self.line.segs[idx].needs_position = true;
+            let seg_idx = self.line.segs[idx].idx;
             let mut seg_min = segments[seg_idx].lower(y, eps);
 
             for i in (0..idx).rev() {
-                let prev_seg_idx = self.line.segs[i];
+                let prev_seg_idx = self.line.seg(i);
                 let prev_seg = &segments[prev_seg_idx];
                 if seg_min - prev_seg.upper(y, eps) > slack {
                     break;
                 } else {
                     seg_min = prev_seg.lower(y, eps);
-                    changed.remove(&prev_seg_idx);
+                    self.line.segs[i].needs_position = true;
                     start_idx = i;
                 }
             }
@@ -520,13 +538,13 @@ impl<F: Float> Sweeper<F> {
             let mut end_idx = idx + 1;
             let mut seg_max = segments[seg_idx].upper(y, eps);
             for i in (idx + 1)..self.line.segs.len() {
-                let next_seg_idx = self.line.segs[i];
+                let next_seg_idx = self.line.seg(i);
                 let next_seg = &segments[next_seg_idx];
                 if next_seg.lower(y, eps) - seg_max > slack {
                     break;
                 } else {
                     seg_max = next_seg.upper(y, eps);
-                    changed.remove(&next_seg_idx);
+                    self.line.segs[i].needs_position = true;
                     end_idx = i + 1;
                 }
             }
@@ -620,11 +638,11 @@ impl SegmentOrder {
         let y = y.to_exact();
         for i in 0..self.segs.len() {
             for j in (i + 1)..self.segs.len() {
-                let segi = segments[self.segs[i]].to_exact();
-                let segj = segments[self.segs[j]].to_exact();
+                let segi = segments[self.seg(i)].to_exact();
+                let segj = segments[self.seg(j)].to_exact();
 
                 if segi.lower(&y, &eps) > segj.upper(&y, &eps) {
-                    return Some((self.segs[i], self.segs[j]));
+                    return Some((self.seg(i), self.seg(j)));
                 }
             }
         }
@@ -642,8 +660,8 @@ impl SegmentOrder {
     ) -> usize {
         // Checks if `other` is smaller than `seg` with no false negatives: if `other` is actually smaller than `seg`
         // it will definitely return true.
-        let maybe_strictly_smaller = |other: &SegIdx| -> bool {
-            let other = &segments[*other];
+        let maybe_strictly_smaller = |other: &SegmentOrderEntry| -> bool {
+            let other = &segments[other.idx];
             // `at_y` is guaranteed to have accuracy eps/8, and in order to have a strict segment inequality there
             // needs to be a difference of at least 2*eps (more, if there's a slope).
             other.at_y(y) < seg.at_y(y)
@@ -662,7 +680,7 @@ impl SegmentOrder {
 
             // Once we've found a segment whose lower bound is definitely bigger than seg's, there's no need
             // to look further.
-            let other = &segments[self.segs[i]];
+            let other = &segments[self.seg(i)];
             // `lower` is accurate to within eps/8, so if this test succeeds then other's lower bound is
             // definitely bigger.
             if other.lower(y, eps) - seg.lower(y, eps) >= eps.clone() / F::from_f32(4.0) {
@@ -676,7 +694,7 @@ impl SegmentOrder {
     //
     // TODO: if we're large, we could use a binary search.
     fn position(&self, seg: SegIdx) -> Option<usize> {
-        self.segs.iter().position(|&x| x == seg)
+        self.segs.iter().position(|&x| x.idx == seg)
     }
 
     /// Returns an iterator of the allowable x positions for a slice of segments.
@@ -686,33 +704,33 @@ impl SegmentOrder {
         range: Range<usize>,
         segments: &'a Segments<F>,
         eps: &'a F,
-    ) -> Vec<(SegIdx, F, F)> {
+    ) -> Vec<(SegmentOrderEntry, F, F)> {
         let segs = &self.segs[range];
         let mut max_so_far = segs
             .first()
-            .map(|seg| segments[*seg].lower(y, eps))
+            .map(|seg| segments[seg.idx].lower(y, eps))
             // If `self.segs` is empty our y doesn't matter; we're going to return
             // an empty vec.
             .unwrap_or(F::from_f32(0.0));
 
         let mut ret: Vec<_> = segs
             .iter()
-            .map(move |seg_idx| {
-                let x = segments[*seg_idx].lower(y, eps);
+            .map(move |seg| {
+                let x = segments[seg.idx].lower(y, eps);
                 max_so_far = max_so_far.clone().max(x);
                 // Fill out the minimum allowed positions, with a placeholder for the maximum.
-                (*seg_idx, max_so_far.clone(), F::from_f32(0.0))
+                (*seg, max_so_far.clone(), F::from_f32(0.0))
             })
             .collect();
 
         let mut min_so_far = segs
             .last()
-            .map(|seg| segments[*seg].upper(y, eps))
+            .map(|seg| segments[seg.idx].upper(y, eps))
             // If `self.segs` is empty our y doesn't matter; we're going to return
             // an empty vec.
             .unwrap_or(F::from_f32(0.0));
-        for (seg_idx, _, max_allowed) in ret.iter_mut().rev() {
-            let x = segments[*seg_idx].upper(y, eps);
+        for (entry, _, max_allowed) in ret.iter_mut().rev() {
+            let x = segments[entry.idx].upper(y, eps);
             min_so_far = min_so_far.clone().min(x);
             *max_allowed = min_so_far.clone();
         }
@@ -724,7 +742,7 @@ impl SegmentOrder {
         self.segs[range.0..range.1]
             .iter()
             .enumerate()
-            .map(|(idx, seg)| (*seg, idx))
+            .map(|(idx, seg)| (seg.idx, idx))
             .collect()
     }
 }
@@ -744,7 +762,7 @@ impl SegmentOrder {
 /// It will change.
 #[derive(Clone, Debug)]
 pub struct SweepLine<'a, F: Float> {
-    pub(crate) state: &'a Sweeper<F>,
+    state: &'a Sweeper<F>,
 }
 
 impl<F: Float> Copy for SweepLine<'_, F> {}
@@ -753,6 +771,16 @@ impl<F: Float> SweepLine<'_, F> {
     /// The vertical position of this sweep-line.
     pub fn y(&self) -> &F {
         &self.state.y
+    }
+
+    /// Get the line segment at position `idx` in the old order.
+    pub fn old_line_segment(&self, idx: usize) -> SegIdx {
+        self.state.old_line.segs[idx].idx
+    }
+
+    /// Get the line segment at position `idx` in the new order.
+    pub fn new_line_segment(&self, idx: usize) -> SegIdx {
+        self.state.line.segs[idx].idx
     }
 
     /// Returns the index ranges of segments in this sweep-line that need to be
@@ -812,34 +840,34 @@ impl<F: Float> SweepLine<'_, F> {
 
         // The two positioning arrays should have the same segments, but possibly in a different
         // order. Group them by segment id.
-        let mut seg_positions: HashMap<SegIdx, (F, Option<F>)> = HashMap::new();
+        let mut seg_positions: HashMap<SegIdx, (F, Option<F>, bool, bool)> = HashMap::new();
         let mut max_so_far = old_xs
             .first()
             .map_or(F::from_f32(0.0), |(_idx, min_x, _max_x)| {
                 min_x.clone() - F::from_f32(1.0)
             });
-        for (idx, min_x, max_x) in old_xs {
-            let preferred_x = if self.state.exits.contains(&idx) {
+        for (entry, min_x, max_x) in old_xs {
+            let preferred_x = if entry.exit {
                 // The best possible position is the true segment-ending position.
                 // (This could change if we want to be more sophisticated at joining contours.)
-                segments[idx].end.x.clone()
-            } else if self.state.entrances.contains(&idx) {
-                // The best possible position is the true segment-ending position.
+                segments[entry.idx].end.x.clone()
+            } else if entry.enter {
+                // The best possible position is the true segment-starting position.
                 // (This could change if we want to be more sophisticated at joining contours.)
-                segments[idx].start.x.clone()
+                segments[entry.idx].start.x.clone()
             } else if max_so_far >= min_x {
                 // The second best possible position is snapping to the neighbor that we
                 // just positioned.
                 max_so_far.clone()
             } else {
-                segments[idx].at_y(&self.state.y)
+                segments[entry.idx].at_y(&self.state.y)
             };
             let x = preferred_x
                 .max(min_x.clone())
                 .max(max_so_far.clone())
                 .min(max_x.clone());
             max_so_far = x.clone();
-            seg_positions.insert(idx, (x, None));
+            seg_positions.insert(entry.idx, (x, None, entry.enter, entry.exit));
         }
 
         let mut max_so_far = new_xs
@@ -847,9 +875,9 @@ impl<F: Float> SweepLine<'_, F> {
             .map_or(F::from_f32(0.0), |(_idx, min_x, _max_x)| {
                 min_x.clone() - F::from_f32(1.0)
             });
-        for (idx, min_x, max_x) in new_xs {
+        for (entry, min_x, max_x) in new_xs {
             let pos = seg_positions
-                .get_mut(&idx)
+                .get_mut(&entry.idx)
                 .expect("the two ranges should have the same segments");
             let preferred_x = if min_x <= pos.0 && pos.0 <= max_x {
                 // Try snapping to the previous position if possible.
@@ -858,7 +886,7 @@ impl<F: Float> SweepLine<'_, F> {
                 // Try snapping to the neighbor we just positioned.
                 max_so_far.clone()
             } else {
-                segments[idx].at_y(&self.state.y)
+                segments[entry.idx].at_y(&self.state.y)
             };
             let x = preferred_x
                 .max(min_x.clone())
@@ -869,13 +897,11 @@ impl<F: Float> SweepLine<'_, F> {
         }
 
         let mut positions: Vec<OutputEvent<F>> = Vec::new();
-        for (idx, (x0, x1)) in seg_positions {
+        for (idx, (x0, x1, entrance, exit)) in seg_positions {
             let Some(x1) = x1 else {
                 panic!("the two ranges should have the same segments");
             };
 
-            let entrance = self.state.entrances.contains(&idx);
-            let exit = self.state.exits.contains(&idx);
             let seg = &segments[idx];
             let kind = match (entrance, exit) {
                 (true, true) => {
@@ -1514,6 +1540,30 @@ mod tests {
         }
         let eps = P::Float::from_f32(0.1);
         sweep(&segs, &eps, |_, _| {});
+    }
+
+    #[test]
+    fn square() {
+        let segs =
+            Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
+        let eps = NotNan::try_from(0.01).unwrap();
+
+        #[derive(serde::Serialize)]
+        struct Output {
+            order: SegmentOrder,
+            changed: Vec<(usize, usize)>,
+        }
+
+        let mut outputs = Vec::new();
+        let mut sweeper = Sweeper::new(&segs, eps);
+        while let Some(line) = sweeper.next_line() {
+            outputs.push(Output {
+                order: line.state.line.clone(),
+                changed: line.changed_intervals().to_owned(),
+            });
+        }
+
+        insta::assert_ron_snapshot!(outputs);
     }
 
     proptest! {

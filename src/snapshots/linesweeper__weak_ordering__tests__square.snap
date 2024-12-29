@@ -1,0 +1,60 @@
+---
+source: src/weak_ordering.rs
+expression: outputs
+---
+[
+  Output(
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          idx: SegIdx(3),
+          exit: false,
+          enter: true,
+          needs_position: true,
+        ),
+        SegmentOrderEntry(
+          idx: SegIdx(0),
+          exit: true,
+          enter: true,
+          needs_position: true,
+        ),
+        SegmentOrderEntry(
+          idx: SegIdx(1),
+          exit: false,
+          enter: true,
+          needs_position: true,
+        ),
+      ],
+    ),
+    changed: [
+      (0, 3),
+    ],
+  ),
+  Output(
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          idx: SegIdx(3),
+          exit: true,
+          enter: false,
+          needs_position: true,
+        ),
+        SegmentOrderEntry(
+          idx: SegIdx(2),
+          exit: true,
+          enter: true,
+          needs_position: true,
+        ),
+        SegmentOrderEntry(
+          idx: SegIdx(1),
+          exit: true,
+          enter: false,
+          needs_position: true,
+        ),
+      ],
+    ),
+    changed: [
+      (0, 3),
+    ],
+  ),
+]

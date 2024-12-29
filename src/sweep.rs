@@ -60,6 +60,8 @@ pub enum SweepEventKind {
     Enter(SegIdx),
     /// A horizontal segment is entering the sweep line (i.e. both its starting and ending `y`s are on the sweep line).
     Horizontal(SegIdx),
+    /// A segment is exiting the sweep line (i.e. the sweep line's `y` is the same as the segment's ending `y`).
+    Exit(SegIdx),
     /// Two segments intersect at the sweep line.
     Intersection {
         /// This segment used to be to the left, and after the intersection it will be to the right.
@@ -70,8 +72,6 @@ pub enum SweepEventKind {
         /// This segment used to be to the right, and after the intersection it will be to the left.
         right: SegIdx,
     },
-    /// A segment is exiting the sweep line (i.e. the sweep line's `y` is the same as the segment's ending `y`).
-    Exit(SegIdx),
 }
 
 impl std::fmt::Debug for SweepEventKind {

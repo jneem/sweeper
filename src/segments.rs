@@ -11,7 +11,7 @@ use crate::{
 /// This index is used to identify a segment, whose data can be retrieved by looking
 /// it up in [`Segments`]. (Of course, this index-as-identifier breaks down if there are
 /// multiple `Segments` in flight. Just be careful not to mix them up.)
-#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct SegIdx(pub usize);
 
 impl std::fmt::Debug for SegIdx {
