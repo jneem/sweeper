@@ -7,8 +7,8 @@
 //   currently put them in some arbitrary order and then later have to process a bunch of intersections
 
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::ops::Range;
-use std::{cmp::Reverse, collections::HashMap};
 
 use malachite::Rational;
 
@@ -71,7 +71,7 @@ impl FromIterator<SegIdx> for SegmentOrder {
 
 #[derive(Clone, Debug)]
 pub struct EventQueue<F: Float> {
-    inner: std::collections::BinaryHeap<std::cmp::Reverse<SweepEvent<F>>>,
+    inner: std::collections::BTreeSet<SweepEvent<F>>,
 }
 
 impl<F: Float> EventQueue<F> {
@@ -80,19 +80,18 @@ impl<F: Float> EventQueue<F> {
     ///
     /// The returned event queue will not contain any intersection events.
     pub fn from_segments(segments: &Segments<F>) -> Self {
-        // Non-horizontal segments take up two events, so allocate for twice the number of segments.
-        let mut inner = std::collections::BinaryHeap::with_capacity(segments.len() * 2);
+        let mut inner = std::collections::BTreeSet::new();
 
         for seg in segments.indices() {
             if segments[seg].is_horizontal() {
-                inner.push(std::cmp::Reverse(SweepEvent {
+                inner.insert(SweepEvent {
                     y: segments[seg].start.y.clone(),
                     kind: SweepEventKind::Horizontal(seg),
-                }));
+                });
             } else {
                 let (a, b) = SweepEvent::from_segment(seg, segments);
-                inner.push(std::cmp::Reverse(a));
-                inner.push(std::cmp::Reverse(b));
+                inner.insert(a);
+                inner.insert(b);
             }
         }
 
@@ -100,19 +99,19 @@ impl<F: Float> EventQueue<F> {
     }
 
     pub fn push(&mut self, ev: SweepEvent<F>) {
-        self.inner.push(std::cmp::Reverse(ev));
+        self.inner.insert(ev);
     }
 
     pub fn pop(&mut self) -> Option<SweepEvent<F>> {
-        self.inner.pop().map(|x| x.0)
+        self.inner.pop_first()
     }
 
     pub fn next_y(&self) -> Option<&F> {
-        self.inner.peek().map(|Reverse(ev)| &ev.y)
+        self.inner.first().map(|ev| &ev.y)
     }
 
     fn next_kind(&self) -> Option<&SweepEventKind> {
-        self.inner.peek().map(|Reverse(ev)| &ev.kind)
+        self.inner.first().map(|ev| &ev.kind)
     }
 
     pub fn next_is_stage_1(&self, y: &F) -> bool {
@@ -425,7 +424,7 @@ impl<F: Float> Sweeper<F> {
     fn check_invariants(&self) {
         for ev in &self.events.inner {
             assert!(
-                ev.0.y >= self.y,
+                ev.y >= self.y,
                 "at y={:?}, event {:?} occurred in the past",
                 &self.y,
                 &ev
@@ -475,14 +474,14 @@ impl<F: Float> Sweeper<F> {
                                 .is_some_and(|pos| i <= pos && pos <= j)
                         };
                         let has_witness = self.events.inner.iter().any(|ev| {
-                            let is_between = match &ev.0.kind {
+                            let is_between = match &ev.kind {
                                 SweepEventKind::Enter(_) | SweepEventKind::Horizontal(_) => false,
                                 SweepEventKind::Intersection { left, right } => {
                                     is_between(*left) && is_between(*right)
                                 }
                                 SweepEventKind::Exit(seg_idx) => is_between(*seg_idx),
                             };
-                            let before_y = ev.0.y.to_exact() <= y_int;
+                            let before_y = ev.y.to_exact() <= y_int;
                             is_between && before_y
                         });
                         assert!(
