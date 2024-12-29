@@ -30,6 +30,7 @@
         devShells.default = mkShell rec {
           buildInputs = [
             cargo-insta
+            cargo-flamegraph
             cargo-outdated
             libclang
             libxkbcommon

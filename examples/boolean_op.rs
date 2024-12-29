@@ -74,7 +74,7 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     });
 
                     let mut points = Vec::<Point<Float>>::new();
-                    kurbo::flatten(kurbo_els, 1e-3, |el| match el {
+                    kurbo::flatten(kurbo_els, 1e-6, |el| match el {
                         kurbo::PathEl::MoveTo(p) => {
                             ret.add_points(points.drain(..));
                             points
@@ -113,6 +113,7 @@ pub fn main() -> anyhow::Result<()> {
     let input = std::fs::read_to_string(&args.input)?;
     let tree = usvg::Tree::from_str(&input, &usvg::Options::default())?;
     let segments = svg_to_segments(&tree);
+    eprintln!("{} segments", segments.len());
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
     let top = Topology::new(&segments, &eps);
