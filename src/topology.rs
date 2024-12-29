@@ -412,12 +412,12 @@ impl<F: Float> Topology<F> {
         let mut ret = Self::from_segments(segments);
         let mut sweep_state = weak_ordering::Sweeper::new(segments, eps.clone());
         while let Some(line) = sweep_state.next_line() {
-            for (start, end) in line.changed_intervals(segments, eps) {
+            for &(start, end) in line.changed_intervals() {
                 let positions = line.events_in_range((start, end), segments, eps);
                 let scan_left_seg = if start == 0 {
                     None
                 } else {
-                    let prev_seg = line.old_line.segs[start - 1];
+                    let prev_seg = line.state.old_line.segs[start - 1];
                     debug_assert!(!ret.open_segs[prev_seg.0].is_empty());
                     ret.open_segs[prev_seg.0].front().copied()
                 };
@@ -436,7 +436,7 @@ impl<F: Float> Topology<F> {
         range: (usize, usize),
         mut scan_left: Option<OutputSegIdx>,
     ) {
-        let y = lines.y;
+        let y = lines.y();
         let mut winding = scan_left
             .map(|idx| self.winding[idx].counter_clockwise)
             .unwrap_or_default();
