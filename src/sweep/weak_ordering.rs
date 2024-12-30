@@ -24,6 +24,9 @@ pub(crate) struct SegmentOrderEntry {
     idx: SegIdx,
     exit: bool,
     enter: bool,
+    // This is filled out during `compute_changed_segments`. Before that
+    // happens, segments are marked for needing positions by putting them in the
+    // `segs_needing_positions` list.
     needs_position: bool,
 }
 
@@ -615,7 +618,14 @@ impl<F: Float> Segment<F> {
     fn lower(&self, y: &F, eps: &F) -> F {
         let min_x = self.end.x.clone().min(self.start.x.clone());
 
-        (self.at_y(y) - self.scaled_eps(eps)).max(min_x - eps)
+        if self.is_horizontal() {
+            // Special case for horizontal lines, because their
+            // `at_y` function returns the larger x position, and
+            // we want the smaller one here.
+            self.start.x.clone() - eps
+        } else {
+            (self.at_y(y) - self.scaled_eps(eps)).max(min_x - eps)
+        }
     }
 
     fn upper(&self, y: &F, eps: &F) -> F {
