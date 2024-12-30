@@ -1,0 +1,34 @@
+---
+source: src/lib.rs
+expression: output
+---
+Contours(
+  contours: [
+    Contour(
+      points: [
+        Point(
+          y: 0.0,
+          x: 0.0,
+        ),
+        Point(
+          y: 0.5,
+          x: 0.0,
+        ),
+        Point(
+          y: 0.5,
+          x: 0.5,
+        ),
+        Point(
+          y: 0.0,
+          x: 0.5,
+        ),
+        Point(
+          y: 0.0,
+          x: 0.0,
+        ),
+      ],
+      parent: None,
+      outer: true,
+    ),
+  ],
+)
