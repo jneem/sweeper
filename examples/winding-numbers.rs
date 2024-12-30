@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use kurbo::DEFAULT_ACCURACY;
 use ordered_float::NotNan;
 
-use linesweeper::{topology::Topology, Point, Segments};
+use linesweeper::{topology::Topology, Point};
 
 type Float = NotNan<f64>;
 
@@ -17,19 +16,20 @@ struct Args {
     epsilon: Option<f64>,
 }
 
-fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
-    let mut ret = Segments::default();
+fn svg_to_contours(tree: &usvg::Tree) -> Vec<Vec<Point<Float>>> {
+    let mut ret = Vec::new();
 
     fn pt(p: usvg::tiny_skia_path::Point) -> kurbo::Point {
         kurbo::Point::new(p.x as f64, p.y as f64)
     }
 
-    fn add_group(group: &usvg::Group, ret: &mut Segments<NotNan<f64>>) {
+    fn add_group(group: &usvg::Group, ret: &mut Vec<Vec<Point<Float>>>) {
         for child in group.children() {
             match child {
                 usvg::Node::Group(group) => add_group(group, ret),
                 usvg::Node::Path(path) => {
-                    let kurbo_els = path.data().segments().map(|seg| match seg {
+                    let data = path.data().clone().transform(path.abs_transform()).unwrap();
+                    let kurbo_els = data.segments().map(|seg| match seg {
                         usvg::tiny_skia_path::PathSegment::MoveTo(p) => {
                             kurbo::PathEl::MoveTo(pt(p))
                         }
@@ -46,9 +46,12 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                     });
 
                     let mut points = Vec::<Point<Float>>::new();
-                    kurbo::flatten(kurbo_els, DEFAULT_ACCURACY, |el| match el {
+                    kurbo::flatten(kurbo_els, 1e-6, |el| match el {
                         kurbo::PathEl::MoveTo(p) => {
-                            ret.add_points(points.drain(..));
+                            // Even if it wasn't closed in the svg, we close it.
+                            if !points.is_empty() {
+                                ret.push(points.split_off(0));
+                            }
                             points
                                 .push(Point::new(p.x.try_into().unwrap(), p.y.try_into().unwrap()));
                         }
@@ -58,7 +61,9 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                         }
                         kurbo::PathEl::ClosePath => {
                             let p = points.first().cloned();
-                            ret.add_cycle(points.drain(..));
+                            if !points.is_empty() {
+                                ret.push(points.split_off(0));
+                            }
                             if let Some(p) = p {
                                 points.push(p);
                             }
@@ -66,8 +71,8 @@ fn svg_to_segments(tree: &usvg::Tree) -> Segments<NotNan<f64>> {
                         kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => unreachable!(),
                     });
 
-                    if points.len() > 1 {
-                        ret.add_points(points.drain(..));
+                    if !points.is_empty() {
+                        ret.push(points);
                     }
                 }
                 _ => {}
@@ -84,20 +89,13 @@ pub fn main() -> anyhow::Result<()> {
 
     let input = std::fs::read_to_string(&args.input)?;
     let tree = usvg::Tree::from_str(&input, &usvg::Options::default())?;
-    let segments = svg_to_segments(&tree);
+    let contours = svg_to_contours(&tree);
 
     let eps = args.epsilon.unwrap_or(0.1).try_into().unwrap();
-    let top = Topology::new(&segments, &eps);
+    let top = Topology::new([contours[0].clone()], contours[1..].iter().cloned(), &eps);
 
-    // I tried using `tree.root().abs_bounding_box()`, but I don't understand the output.
-    let ys: Vec<_> = segments
-        .segments()
-        .flat_map(|s| [s.start.y, s.end.y])
-        .collect();
-    let xs: Vec<_> = segments
-        .segments()
-        .flat_map(|s| [s.start.x, s.end.x])
-        .collect();
+    let ys: Vec<_> = contours.iter().flatten().map(|p| p.y).collect();
+    let xs: Vec<_> = contours.iter().flatten().map(|p| p.x).collect();
     let min_x = xs.iter().min().unwrap().into_inner();
     let max_x = xs.iter().max().unwrap().into_inner();
     let min_y = ys.iter().min().unwrap().into_inner();

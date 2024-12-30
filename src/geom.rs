@@ -65,12 +65,13 @@ impl<F: Float> From<(F, F)> for Point<F> {
     }
 }
 
-impl From<(f64, f64)> for Point<NotNan<f64>> {
-    fn from((x, y): (f64, f64)) -> Self {
-        Self {
-            x: x.try_into().unwrap(),
-            y: y.try_into().unwrap(),
-        }
+impl TryFrom<(f64, f64)> for Point<NotNan<f64>> {
+    type Error = crate::Error;
+
+    fn try_from((x, y): (f64, f64)) -> Result<Self, Self::Error> {
+        let x = NotNan::try_from(x).map_err(|_| crate::Error::NaN)?;
+        let y = NotNan::try_from(y).map_err(|_| crate::Error::NaN)?;
+        Ok((x, y).into())
     }
 }
 

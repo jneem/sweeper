@@ -384,9 +384,29 @@ impl<F: Float> Topology<F> {
         out_idx
     }
 
-    fn from_segments(segments: &Segments<F>) -> Self {
+    /// Creates a new `Topology` for a collection of segments and a given tolerance.
+    ///
+    /// The segments must contain only closed polylines. For the purpose of boolean ops,
+    /// the first closed polyline determines the first set and all the other polylines determine
+    /// the other set. (Obviously this isn't flexible, and it will be changed. TODO)
+    pub fn new(
+        set_a: impl IntoIterator<Item = impl IntoIterator<Item = Point<F>>>,
+        set_b: impl IntoIterator<Item = impl IntoIterator<Item = Point<F>>>,
+        eps: &F,
+    ) -> Self {
+        let mut segments = Segments::default();
+        let mut shape_a = Vec::new();
+        for polyline in set_a {
+            segments.add_cycle(polyline);
+        }
+        shape_a.resize(segments.len(), true);
+        for polyline in set_b {
+            segments.add_cycle(polyline);
+        }
+        shape_a.resize(segments.len(), false);
+
         let mut ret = Self {
-            shape_a: vec![false; segments.len()],
+            shape_a,
             open_segs: vec![VecDeque::new(); segments.len()],
             winding: OutputSegVec::default(),
             point: HalfOutputSegVec::default(),
@@ -394,31 +414,10 @@ impl<F: Float> Topology<F> {
             deleted: OutputSegVec::default(),
             scan_east: OutputSegVec::default(),
         };
-
-        // Mark the first contour as shape a.
-        let start = SegIdx(0);
-        ret.shape_a[0] = true;
-        // FIXME: unwrap. This topology stuff only works with closed contours, but we should
-        // have a more robust API.
-        let mut idx = segments.contour_next(start).unwrap();
-        while idx != start {
-            ret.shape_a[idx.0] = true;
-            idx = segments.contour_next(idx).unwrap();
-        }
-        ret
-    }
-
-    /// Creates a new `Topology` for a collection of segments and a given tolerance.
-    ///
-    /// The segments must contain only closed polylines. For the purpose of boolean ops,
-    /// the first closed polyline determines the first set and all the other polylines determine
-    /// the other set. (Obviously this isn't flexible, and it will be changed. TODO)
-    pub fn new(segments: &Segments<F>, eps: &F) -> Self {
-        let mut ret = Self::from_segments(segments);
-        let mut sweep_state = Sweeper::new(segments, eps.clone());
+        let mut sweep_state = Sweeper::new(&segments, eps.clone());
         while let Some(line) = sweep_state.next_line() {
             for &(start, end) in line.changed_intervals() {
-                let positions = line.events_in_range((start, end), segments, eps);
+                let positions = line.events_in_range((start, end), &segments, eps);
                 let scan_left_seg = if start == 0 {
                     None
                 } else {
@@ -426,7 +425,7 @@ impl<F: Float> Topology<F> {
                     debug_assert!(!ret.open_segs[prev_seg.0].is_empty());
                     ret.open_segs[prev_seg.0].front().copied()
                 };
-                ret.update_from_positions(positions, segments, line, (start, end), scan_left_seg);
+                ret.update_from_positions(positions, &segments, line, (start, end), scan_left_seg);
             }
         }
         ret.merge_coincident();
@@ -941,7 +940,7 @@ impl<F: Float> Default for Contours<F> {
 mod tests {
     use ordered_float::NotNan;
 
-    use crate::{geom::Point, segments::Segments};
+    use crate::geom::Point;
 
     use super::Topology;
 
@@ -949,40 +948,39 @@ mod tests {
         Point::new(x.try_into().unwrap(), y.try_into().unwrap())
     }
 
+    const EMPTY: [[Point<NotNan<f64>>; 0]; 0] = [];
+
     #[test]
     fn square() {
-        let segs =
-            Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
+        let segs = [[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::new(&segs, &eps);
+        let top = Topology::new(segs, EMPTY, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
 
     #[test]
     fn diamond() {
-        let segs =
-            Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]);
+        let segs = [[p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::new(&segs, &eps);
+        let top = Topology::new(segs, EMPTY, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
 
     #[test]
     fn square_and_diamond() {
-        let mut segs =
-            Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
-        segs.add_cycle([p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]);
+        let square = [[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]];
+        let diamond = [[p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::new(&segs, &eps);
+        let top = Topology::new(square, diamond, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
 
     #[test]
     fn square_with_double_back() {
-        let segs = Segments::from_closed_cycle([
+        let segs = [[
             p(0.0, 0.0),
             p(0.5, 0.0),
             p(0.5, 0.5),
@@ -990,20 +988,19 @@ mod tests {
             p(1.0, 0.0),
             p(1.0, 1.0),
             p(0.0, 1.0),
-        ]);
+        ]];
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::new(&segs, &eps);
+        let top = Topology::new(segs, EMPTY, &eps);
 
         insta::assert_ron_snapshot!(top);
     }
 
     #[test]
     fn nested_squares() {
-        let mut segs =
-            Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
-        segs.add_cycle([p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)]);
+        let outer = [[p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]];
+        let inner = [[p(-1.0, -1.0), p(1.0, -1.0), p(1.0, 1.0), p(-1.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::new(&segs, &eps);
+        let top = Topology::new(outer, inner, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));
@@ -1011,12 +1008,13 @@ mod tests {
 
     #[test]
     fn inner_loop() {
-        let mut segs =
-            Segments::from_closed_cycle([p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]);
-        segs.add_cycle([p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)]);
-        segs.add_cycle([p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)]);
+        let outer = [[p(-2.0, -2.0), p(2.0, -2.0), p(2.0, 2.0), p(-2.0, 2.0)]];
+        let inners = [
+            [p(-1.5, -1.0), p(0.0, 2.0), p(1.5, -1.0)],
+            [p(-0.1, 0.0), p(0.0, 2.0), p(0.1, 0.0)],
+        ];
         let eps = NotNan::try_from(0.01).unwrap();
-        let top = Topology::new(&segs, &eps);
+        let top = Topology::new(outer, inners, &eps);
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));
