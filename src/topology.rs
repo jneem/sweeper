@@ -711,8 +711,6 @@ impl<F: Float> Topology<F> {
                 debug_assert!(inside(self.winding(next).clockwise));
                 debug_assert!(!inside(self.winding(next).counter_clockwise));
 
-                segs.push(next);
-
                 // Walk clockwise around the point until we find the next segment
                 // that's on the boundary.
                 let mut nbr = self.point_neighbors[next].clockwise;
@@ -724,6 +722,7 @@ impl<F: Float> Topology<F> {
                 if nbr == start {
                     break;
                 }
+                segs.push(next);
 
                 let p = self.point[nbr].clone();
                 if let Some(seg_idx) = last_visit.get(&p) {

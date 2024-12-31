@@ -22,10 +22,6 @@ Contours(
           y: 0.0,
           x: 0.5,
         ),
-        Point(
-          y: 0.0,
-          x: 0.0,
-        ),
       ],
       parent: None,
       outer: true,

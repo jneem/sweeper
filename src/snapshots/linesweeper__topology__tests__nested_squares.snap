@@ -1,5 +1,5 @@
 ---
-source: sweeps/src/topology.rs
+source: src/topology.rs
 expression: "(top, contours)"
 ---
 (Topology(
@@ -387,10 +387,6 @@ expression: "(top, contours)"
           y: -2.0,
           x: 2.0,
         ),
-        Point(
-          y: -2.0,
-          x: -2.0,
-        ),
       ],
       parent: None,
       outer: true,
@@ -412,10 +408,6 @@ expression: "(top, contours)"
         Point(
           y: 1.0,
           x: 1.0,
-        ),
-        Point(
-          y: 1.0,
-          x: -1.0,
         ),
       ],
       parent: Some(ContourIdx(0)),
