@@ -938,10 +938,17 @@ impl<F: Float> Default for Contours<F> {
 #[cfg(test)]
 mod tests {
     use ordered_float::NotNan;
+    use proptest::prelude::*;
 
-    use crate::geom::Point;
+    use crate::{
+        geom::Point,
+        perturbation::{
+            f64_perturbation, perturbation, realize_perturbation, F64Perturbation, Perturbation,
+        },
+        Float, Segment,
+    };
 
-    use super::Topology;
+    use super::{OutputSegIdx, Topology};
 
     fn p(x: f64, y: f64) -> Point<NotNan<f64>> {
         Point::new(x.try_into().unwrap(), y.try_into().unwrap())
@@ -954,6 +961,7 @@ mod tests {
         let segs = [[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::new(segs, EMPTY, &eps);
+        check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -963,6 +971,7 @@ mod tests {
         let segs = [[p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::new(segs, EMPTY, &eps);
+        check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -973,6 +982,7 @@ mod tests {
         let diamond = [[p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]];
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::new(square, diamond, &eps);
+        check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -990,6 +1000,7 @@ mod tests {
         ]];
         let eps = NotNan::try_from(0.01).unwrap();
         let top = Topology::new(segs, EMPTY, &eps);
+        check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
     }
@@ -1017,5 +1028,68 @@ mod tests {
         let contours = top.contours(|w| (w.shape_a + w.shape_b) % 2 != 0);
 
         insta::assert_ron_snapshot!((top, contours));
+    }
+
+    // Checks that all output segments intersect one another only at endpoints.
+    fn check_intersections<F: Float>(top: &Topology<F>) {
+        for i in 0..top.winding.inner.len() {
+            for j in (i + 1)..top.winding.inner.len() {
+                let i = OutputSegIdx(i);
+                let j = OutputSegIdx(j);
+
+                let p0 = top.point[i.first_half()].clone();
+                let p1 = top.point[i.second_half()].clone();
+                let q0 = top.point[j.first_half()].clone();
+                let q1 = top.point[j.second_half()].clone();
+
+                let s = Segment {
+                    start: p0.clone().min(p1.clone()),
+                    end: p1.max(p0),
+                }
+                .to_exact();
+                let t = Segment {
+                    start: q0.clone().min(q1.clone()),
+                    end: q1.max(q0),
+                }
+                .to_exact();
+
+                if s.end.y >= t.start.y && t.end.y >= s.start.y {
+                    if let Some(y) = s.exact_intersection_y(&t) {
+                        dbg!(&s, &t, &y);
+                        assert!(
+                            s.start == t.start
+                                || s.start == t.end
+                                || s.end == t.start
+                                || s.end == t.end
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {
+        let base = vec![vec![
+            p(0.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+            p(2.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+        ]];
+        let perturbed_polylines = ps
+            .iter()
+            .map(|p| realize_perturbation(&base, p))
+            .collect::<Vec<_>>();
+        let eps = NotNan::try_from(0.1).unwrap();
+        let top = Topology::new(perturbed_polylines, EMPTY, &eps);
+        check_intersections(&top);
+    }
+
+    proptest! {
+    #[test]
+    fn perturbation_test_f64(perturbations in prop::collection::vec(perturbation(f64_perturbation(0.1)), 1..5)) {
+        run_perturbation(perturbations);
+    }
     }
 }

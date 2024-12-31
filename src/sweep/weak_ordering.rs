@@ -221,16 +221,22 @@ impl<F: Float> Sweeper<F> {
     }
 
     fn advance(&mut self, y: F) {
-        // Reset states, keeping track of the exits so that we can
-        // remove them.
-        self.segs_needing_positions.retain(|idx| {
-            let is_exit = self.line.segs[*idx].exit;
-            self.line.segs[*idx].reset_state();
-            is_exit
-        });
+        // All the exiting segments should be in segs_needing_positions, so find them all and remove them.
+        self.segs_needing_positions
+            .retain(|idx| self.line.segs[*idx].exit);
+
+        // Reset the state flags for all segments. All segments with non-trivial state flags should
+        // belong to the changed intervals. This needs to go before we remove the exiting segments,
+        // because that messes up the indices.
+        for (start, end) in self.changed_intervals.drain(..) {
+            for seg in &mut self.line.segs[start..end] {
+                seg.reset_state();
+            }
+        }
 
         // Remove the exiting segments in reverse order, so the indices stay good.
         self.segs_needing_positions.sort();
+        self.segs_needing_positions.dedup();
         for &idx in self.segs_needing_positions.iter().rev() {
             self.line.segs.remove(idx);
         }
@@ -503,7 +509,7 @@ impl<F: Float> Sweeper<F> {
     /// For each segment marked as needing a position, we expand it to a range of
     /// physically nearby segments, and then we deduplicate and merge those ranges.
     fn compute_changed_intervals(&mut self) {
-        self.changed_intervals.clear();
+        debug_assert!(self.changed_intervals.is_empty());
         let y = &self.y;
 
         // We compare horizontal positions to decide when to stop iterating. Those positions
@@ -1382,7 +1388,8 @@ mod tests {
         geom::{Point, Segment},
         perturbation::{
             f32_perturbation, f64_perturbation, perturbation, rational_perturbation,
-            realize_perturbation, FloatPerturbation, Perturbation,
+            realize_perturbation, F64Perturbation, FloatPerturbation, Perturbation,
+            PointPerturbation,
         },
         segments::Segments,
     };
@@ -1553,28 +1560,57 @@ mod tests {
         sweep(&segs, &eps, |_, _| {});
     }
 
-    #[test]
-    fn square() {
-        let segs =
-            Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
-        let eps = NotNan::try_from(0.01).unwrap();
-
-        #[derive(serde::Serialize)]
-        struct Output {
-            order: SegmentOrder,
-            changed: Vec<(usize, usize)>,
-        }
-
+    #[derive(serde::Serialize)]
+    struct Output {
+        order: SegmentOrder,
+        changed: Vec<(usize, usize)>,
+    }
+    fn snapshot_outputs(segs: Segments<NotNan<f64>>, eps: f64) -> Vec<Output> {
         let mut outputs = Vec::new();
-        let mut sweeper = Sweeper::new(&segs, eps);
+        let mut sweeper = Sweeper::new(&segs, eps.try_into().unwrap());
         while let Some(line) = sweeper.next_line() {
             outputs.push(Output {
                 order: line.state.line.clone(),
                 changed: line.changed_intervals().to_owned(),
             });
         }
+        outputs
+    }
 
-        insta::assert_ron_snapshot!(outputs);
+    #[test]
+    fn square() {
+        let segs =
+            Segments::from_closed_cycle([p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]);
+        insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.01));
+    }
+
+    #[test]
+    fn regression_position_state() {
+        let ps = [Perturbation::Point {
+            perturbation: PointPerturbation {
+                x: F64Perturbation::Ulp(0),
+                y: F64Perturbation::Ulp(-1),
+            },
+            idx: 14924312967467343829,
+            next: Box::new(Perturbation::Base { idx: 0 }),
+        }];
+        let base = vec![vec![
+            p(0.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+            p(2.0, 0.0),
+            p(1.0, 1.0),
+            p(1.0, -1.0),
+        ]];
+        let perturbed_polylines = ps
+            .iter()
+            .map(|p| realize_perturbation(&base, p))
+            .collect::<Vec<_>>();
+        let mut segs = Segments::default();
+        for poly in perturbed_polylines {
+            segs.add_cycle(poly);
+        }
+        insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.1));
     }
 
     proptest! {
