@@ -7,6 +7,9 @@ authors = ["Joe Neeman <joe@neeman.me>"]
 description = "Robust sweep-line algorithm and two-dimensional boolean ops"
 repository = "https://github.com/jneem/linesweeper"
 
+[features]
+slow-asserts = []
+
 [dependencies]
 malachite = "0.4.5"
 ordered-float = { version = "4.2.0", features = ["serde"] }

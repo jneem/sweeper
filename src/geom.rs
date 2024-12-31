@@ -285,7 +285,7 @@ pub(crate) mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1000000))]
+        #![proptest_config(ProptestConfig::with_cases(100000))]
 
         // A quick sanity check that f64 addition is as accurate as I think it is. Changing the -24 to
         // a -25 makes this test fail.

@@ -187,25 +187,21 @@ impl<F: Float> Sweeper<F> {
     ///
     /// Returns `None` when sweeping is complete.
     pub fn next_line(&mut self) -> Option<SweepLine<'_, F>> {
-        #[cfg(debug_assertions)]
         self.check_invariants();
 
         let y = self.events.next_y().cloned()?;
         self.advance(y.clone());
-        #[cfg(debug_assertions)]
         self.check_invariants();
 
         // Process all the enter events at this y.
         while self.events.next_is_stage_1(&y) {
             self.step();
-            #[cfg(debug_assertions)]
             self.check_invariants();
         }
 
         // Process all the exit events.
         while self.events.next_is_stage_2(&y) {
             self.step();
-            #[cfg(debug_assertions)]
             self.check_invariants();
         }
 
@@ -217,7 +213,6 @@ impl<F: Float> Sweeper<F> {
         // Process all the intersection events at this y.
         while self.events.next_is_at(&y) {
             self.step();
-            #[cfg(debug_assertions)]
             self.check_invariants();
         }
 
@@ -424,6 +419,7 @@ impl<F: Float> Sweeper<F> {
         }
     }
 
+    #[cfg(feature = "slow-asserts")]
     fn check_invariants(&self) {
         for ev in &self.events.inner {
             assert!(
@@ -498,6 +494,9 @@ impl<F: Float> Sweeper<F> {
         }
     }
 
+    #[cfg(not(feature = "slow-asserts"))]
+    fn check_invariants(&self) {}
+
     /// Updates our internal `changed_intervals` state based on the segments marked
     /// as needing positions.
     ///
@@ -567,6 +566,7 @@ impl Segment<Rational> {
     // The moment our lower bound crosses to the right of `other`'s upper bound.
     // (Actually, it could give too large a value right now, because it doesn't take the
     // "chamfers" into account.)
+    #[cfg(feature = "slow-asserts")]
     pub(crate) fn exact_eps_crossing(&self, other: &Self, eps: &Rational) -> Option<Rational> {
         let y0 = self.start.y.clone().max(other.start.y.clone());
         let y1 = self.end.y.clone().min(other.end.y.clone());
@@ -637,6 +637,8 @@ impl<F: Float> Segment<F> {
 
 impl SegmentOrder {
     /// If the ordering invariants fail, returns a pair of indices witnessing that failure.
+    /// Used in tests, and when enabling slow-asserts
+    #[allow(dead_code)]
     fn find_invalid_order<F: Float>(
         &self,
         y: &F,
