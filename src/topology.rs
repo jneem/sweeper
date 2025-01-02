@@ -421,7 +421,7 @@ impl<F: Float> Topology<F> {
                 let scan_left_seg = if start == 0 {
                     None
                 } else {
-                    let prev_seg = line.old_line_segment(start - 1);
+                    let prev_seg = line.line_segment(start - 1);
                     debug_assert!(!ret.open_segs[prev_seg.0].is_empty());
                     ret.open_segs[prev_seg.0].front().copied()
                 };
@@ -1055,7 +1055,7 @@ mod tests {
 
                 if s.end.y >= t.start.y && t.end.y >= s.start.y {
                     if let Some(y) = s.exact_intersection_y(&t) {
-                        dbg!(&s, &t, &y);
+                        dbg!(y);
                         assert!(
                             s.start == t.start
                                 || s.start == t.end

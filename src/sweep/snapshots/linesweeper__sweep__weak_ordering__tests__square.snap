@@ -1,28 +1,31 @@
 ---
 source: src/sweep/weak_ordering.rs
-expression: outputs
+expression: "snapshot_outputs(segs, 0.01)"
 ---
 [
   Output(
     order: SegmentOrder(
       segs: [
         SegmentOrderEntry(
-          idx: SegIdx(3),
+          seg: SegIdx(3),
           exit: false,
           enter: true,
           needs_position: true,
+          old_idx: Some(0),
         ),
         SegmentOrderEntry(
-          idx: SegIdx(0),
+          seg: SegIdx(0),
           exit: true,
           enter: true,
           needs_position: true,
+          old_idx: Some(1),
         ),
         SegmentOrderEntry(
-          idx: SegIdx(1),
+          seg: SegIdx(1),
           exit: false,
           enter: true,
           needs_position: true,
+          old_idx: Some(2),
         ),
       ],
     ),
@@ -34,22 +37,25 @@ expression: outputs
     order: SegmentOrder(
       segs: [
         SegmentOrderEntry(
-          idx: SegIdx(3),
+          seg: SegIdx(3),
           exit: true,
           enter: false,
           needs_position: true,
+          old_idx: Some(0),
         ),
         SegmentOrderEntry(
-          idx: SegIdx(2),
+          seg: SegIdx(2),
           exit: true,
           enter: true,
           needs_position: true,
+          old_idx: Some(1),
         ),
         SegmentOrderEntry(
-          idx: SegIdx(1),
+          seg: SegIdx(1),
           exit: true,
           enter: false,
           needs_position: true,
+          old_idx: Some(2),
         ),
       ],
     ),

@@ -2,10 +2,7 @@ use std::{collections::HashSet, path::PathBuf};
 
 use clap::Parser;
 use kurbo::DEFAULT_ACCURACY;
-use linesweeper::{
-    sweep::{OutputEvent, OutputEventKind},
-    Point, SegIdx, Segments,
-};
+use linesweeper::{sweep::OutputEvent, Point, SegIdx, Segments};
 use ordered_float::NotNan;
 
 type Float = NotNan<f64>;
@@ -100,22 +97,19 @@ impl SegmentCollector {
         if y > self.y {
             self.advance_y(y);
         }
-        match ev.kind {
-            OutputEventKind::Point { x, .. } => {
-                self.segs[seg_idx].push(Point::new(x, y));
+        if ev.x0 == ev.x1 {
+            self.segs[seg_idx].push(Point::new(ev.x0, y));
+        } else {
+            let (segs, x0, x1) = if ev.x0 < ev.x1 {
+                (&mut self.segs[seg_idx], ev.x0, ev.x1)
+            } else {
+                (&mut self.backwards[seg_idx], ev.x1, ev.x0)
+            };
+            if segs.is_empty() {
+                segs.push(Point::new(x0, y));
             }
-            OutputEventKind::Horizontal { x0, x1, .. } => {
-                let (segs, x0, x1) = if x0 < x1 {
-                    (&mut self.segs[seg_idx], x0, x1)
-                } else {
-                    (&mut self.backwards[seg_idx], x1, x0)
-                };
-                if segs.is_empty() {
-                    segs.push(Point::new(x0, y));
-                }
-                segs.push(Point::new(x1, y));
-            }
-        };
+            segs.push(Point::new(x1, y));
+        }
     }
 
     fn new(size: usize) -> Self {

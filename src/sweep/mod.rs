@@ -12,9 +12,7 @@ use crate::{
 
 mod weak_ordering;
 
-pub use weak_ordering::{
-    sweep, OutputEvent, OutputEventBatcher, OutputEventKind, SweepLine, Sweeper,
-};
+pub use weak_ordering::{sweep, OutputEvent, OutputEventBatcher, SweepLine, Sweeper};
 
 /// A sweep line event.
 ///
