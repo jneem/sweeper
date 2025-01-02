@@ -866,9 +866,7 @@ impl<F: Float> SweepLine<'_, F> {
 
         // The two positioning arrays should have the same segments, but possibly in a different
         // order. We build them up in the old-sweep-line order.
-        // TODO: we should be able to build up the return value directly
-        let mut seg_positions: Vec<(SegIdx, F, Option<F>, bool, bool)> =
-            Vec::with_capacity(range.1 - range.0);
+        let mut events: Vec<OutputEvent<F>> = Vec::with_capacity(range.1 - range.0);
         // It would be natural to set max_so_far to -infinity, but a generic F: Float doesn't
         // have -infinity.
         let mut max_so_far = old_xs
@@ -897,7 +895,14 @@ impl<F: Float> SweepLine<'_, F> {
                 .max(max_so_far.clone())
                 .min(max_x.clone());
             max_so_far = x.clone();
-            seg_positions.push((entry.seg, x, None, entry.enter, entry.exit));
+            events.push(OutputEvent {
+                x0: x,
+                connected_above: !entry.enter,
+                // This will be filled out when we traverse new_xs.
+                x1: F::from_f32(42.42),
+                connected_below: !entry.exit,
+                seg_idx: entry.seg,
+            });
         }
 
         let mut max_so_far = new_xs
@@ -906,61 +911,42 @@ impl<F: Float> SweepLine<'_, F> {
                 min_x.clone() - F::from_f32(1.0)
             });
         for (entry, min_x, max_x) in new_xs {
-            let (seg_idx, old_x, new_x, _, _) =
-                &mut seg_positions[entry.old_idx.unwrap() - range.0];
-            debug_assert_eq!(*seg_idx, entry.seg);
-            let preferred_x = if min_x <= *old_x && *old_x <= max_x {
+            let ev = &mut events[entry.old_idx.unwrap() - range.0];
+            debug_assert_eq!(ev.seg_idx, entry.seg);
+            let preferred_x = if min_x <= ev.x0 && ev.x0 <= max_x {
                 // Try snapping to the previous position if possible.
-                old_x.clone()
+                ev.x0.clone()
             } else if max_so_far >= min_x {
                 // Try snapping to the neighbor we just positioned.
                 max_so_far.clone()
             } else {
                 segments[entry.seg].at_y(&self.state.y)
             };
-            let x = preferred_x
+            ev.x1 = preferred_x
                 .max(min_x.clone())
                 .max(max_so_far.clone())
                 .min(max_x.clone());
-            max_so_far = x.clone();
-            *new_x = Some(x);
+            max_so_far = ev.x1.clone();
         }
 
-        let mut positions = Vec::with_capacity(range.1 - range.0);
-        for (idx, x0, x1, entrance, exit) in seg_positions {
-            let Some(x1) = x1 else {
-                panic!("the two ranges should have the same segments");
-            };
-
-            let seg = &segments[idx];
-            let ev = match (entrance, exit) {
-                (true, true) => {
-                    // A horizontal segment. We can ignore the inferred position, and
-                    // go with the original bounds.
-                    debug_assert!(seg.is_horizontal());
-                    OutputEvent::new(idx, seg.start.x.clone(), false, seg.end.x.clone(), false)
-                }
-                (true, false) => {
-                    // The segment enters at this sweep-line. The actual entrance position
-                    // will be the segment's true start position, and then we will move
-                    // to the adjusted position before leaving this sweep-line.
-                    OutputEvent::new(idx, seg.start.x.clone(), false, x1, true)
-                }
-                (false, true) => {
-                    // The segment terminates at this sweep-line. The actual final position
-                    // will be the segment's true end position, but the segment will enter
-                    // the sweep-line at the adjusted position.
-                    OutputEvent::new(idx, x0, true, seg.end.x.clone(), false)
-                }
-                (false, false) => OutputEvent::new(idx, x0, true, x1, true),
-            };
-
-            positions.push(ev);
+        // Modify the positions so that entering and exiting segments get their exact position.
+        //
+        // This is the easiest way to maintain the continuity of contours, but
+        // eventually we should change this to minimize horizontal jank. But
+        // first, we should add a test for continuity of contours (TODO).
+        for ev in &mut events {
+            let seg = &segments[ev.seg_idx];
+            if !ev.connected_above {
+                ev.x0 = seg.start.x.clone();
+            }
+            if !ev.connected_below {
+                ev.x1 = seg.end.x.clone();
+            }
         }
-        positions.sort();
+        events.sort();
 
         OutputEventBatcher {
-            positions: positions.into_iter(),
+            positions: events.into_iter(),
             last_x: None,
             active_horizontals: BTreeSet::new(),
         }
